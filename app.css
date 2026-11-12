@@ -1,0 +1,105 @@
+:root{
+  --bg:#14181d; --panel:#1d232a; --line:#2e3740; --text:#e8edf2; --muted:#9aa7b3;
+  --accent:#2f81f7; --accent2:#1f6feb;
+  --s1:#3fb950; --s2:#d29922; --s3:#f0883e; --s4:#f85149;
+  font-family: "Sarabun","Noto Sans Thai","Segoe UI",Tahoma,sans-serif;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--text)}
+#potree_render_area{position:absolute;inset:0}
+#labels{position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:5}
+
+.btn{background:#26303a;color:var(--text);border:1px solid var(--line);border-radius:8px;
+  padding:8px 12px;font:inherit;font-size:14px;cursor:pointer;white-space:nowrap}
+.btn:hover{background:#2f3b47}
+.btn.primary{background:var(--accent2);border-color:var(--accent2)}
+.btn.primary:hover{background:var(--accent)}
+.btn.danger{background:#5a1d1d;border-color:#7d2a2a}
+.btn.icon{padding:6px 10px}
+.btn:disabled{opacity:.5;cursor:default}
+
+#topbar{position:absolute;top:0;left:0;right:0;z-index:10;display:flex;justify-content:space-between;
+  align-items:center;gap:8px;padding:8px 10px;background:linear-gradient(#000a,#0000)}
+.brand{display:flex;align-items:center;gap:8px;min-width:0}
+.title{font-weight:600;font-size:15px;text-shadow:0 1px 3px #000;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mode-badge{background:#9e6a03;color:#fff;font-size:12px;padding:2px 8px;border-radius:10px}
+.top-actions{display:flex;gap:6px}
+
+#editbar,#drawbar{position:absolute;left:50%;transform:translateX(-50%);bottom:16px;z-index:10;
+  display:flex;gap:8px;align-items:center;background:#0d1117e6;border:1px solid var(--line);
+  border-radius:12px;padding:8px;flex-wrap:wrap;justify-content:center;max-width:calc(100% - 16px)}
+#drawHint{font-size:13px;color:var(--muted);padding:0 4px}
+.menu{position:absolute;bottom:56px;right:8px;background:var(--panel);border:1px solid var(--line);
+  border-radius:10px;display:flex;flex-direction:column;min-width:230px;overflow:hidden}
+.menu button{background:none;border:0;color:var(--text);text-align:left;padding:10px 14px;font:inherit;font-size:14px;cursor:pointer}
+.menu button:hover{background:#2a333d}
+
+#panel{position:absolute;z-index:20;top:52px;right:10px;bottom:10px;width:380px;background:var(--panel);
+  border:1px solid var(--line);border-radius:12px;display:flex;flex-direction:column;box-shadow:0 8px 30px #0008}
+.panel-head{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid var(--line)}
+.panel-head h2{margin:0;font-size:16px}
+#panelBody{overflow:auto;padding:12px;flex:1}
+
+.popover{position:absolute;z-index:20;top:52px;right:10px;background:var(--panel);border:1px solid var(--line);
+  border-radius:12px;padding:12px 14px;max-width:300px}
+.popover h3{margin:0 0 8px;font-size:14px}
+.muted{color:var(--muted);font-size:13px}
+.sev-row{display:flex;align-items:center;gap:8px;font-size:14px;margin:4px 0}
+.dot{width:12px;height:12px;border-radius:50%;display:inline-block;flex:none;border:2px solid #fff8}
+
+/* ป้ายบนโมเดล */
+.tag-label{position:absolute;transform:translate(-50%,-100%);pointer-events:auto;cursor:pointer;
+  display:flex;flex-direction:column;align-items:center;user-select:none}
+.tag-label .chip{font-size:12px;font-weight:600;color:#fff;padding:2px 7px;border-radius:9px;
+  border:1.5px solid #fff;box-shadow:0 1px 4px #000a;white-space:nowrap}
+.tag-label .stem{width:2px;height:10px;background:#fff}
+.tag-label .pin{width:9px;height:9px;border-radius:50%;background:#fff;margin-top:-1px;box-shadow:0 0 0 2px #0006}
+.tag-label.active .chip{outline:3px solid #fff;outline-offset:1px}
+.draw-vertex{position:absolute;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;
+  background:#fff;border:3px solid var(--accent);pointer-events:none}
+
+/* รายละเอียด */
+.kv{display:grid;grid-template-columns:118px 1fr;gap:6px 10px;font-size:14px;margin-bottom:12px}
+.kv dt{color:var(--muted)} .kv dd{margin:0;word-break:break-word;white-space:pre-wrap}
+.sev-pill{display:inline-block;padding:1px 9px;border-radius:9px;color:#fff;font-size:13px}
+.photos{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:6px;margin:8px 0}
+.photos img{width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:6px;cursor:zoom-in;border:1px solid var(--line)}
+.photo-wrap{position:relative}
+.photo-wrap .rm{position:absolute;top:3px;right:3px;padding:0 6px;font-size:12px}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+
+/* ฟอร์ม */
+.form label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
+.form input,.form select,.form textarea{width:100%;background:#11161b;color:var(--text);border:1px solid var(--line);
+  border-radius:8px;padding:8px;font:inherit;font-size:14px}
+.form textarea{min-height:70px;resize:vertical}
+.row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.auto{font-size:12px;color:var(--muted);margin-top:3px}
+
+/* รายการ */
+.filters{display:flex;gap:6px;margin-bottom:10px}
+.filters select,.filters input{flex:1;background:#11161b;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px;font:inherit;font-size:13px}
+.list-item{display:flex;gap:10px;align-items:flex-start;padding:9px 6px;border-bottom:1px solid var(--line);cursor:pointer}
+.list-item:hover{background:#252d36}
+.list-item .meta{font-size:12px;color:var(--muted)}
+.list-item b{font-size:14px}
+.summary{font-size:13px;color:var(--muted);margin-bottom:8px}
+
+#toast{position:absolute;z-index:40;left:50%;top:60px;transform:translateX(-50%);background:#0d1117f0;
+  border:1px solid var(--line);padding:8px 14px;border-radius:10px;font-size:14px}
+#loading{position:absolute;z-index:30;left:50%;top:50%;transform:translate(-50%,-50%);background:#0d1117e6;
+  padding:10px 16px;border-radius:10px;font-size:14px}
+#lightbox{position:fixed;inset:0;z-index:60;background:#000e;display:flex;align-items:center;justify-content:center}
+#lightbox img{max-width:96vw;max-height:92vh}
+
+/* ซ่อน UI เดิมของ Potree */
+#potree_sidebar_container,#potree_quick_buttons,#potree_description{display:none!important}
+
+@media (max-width:700px){
+  #panel{top:auto;left:0;right:0;bottom:0;width:auto;max-height:62vh;border-radius:14px 14px 0 0}
+  .popover{left:10px;right:10px;max-width:none}
+  #editbar{bottom:10px}
+  .kv{grid-template-columns:100px 1fr}
+}

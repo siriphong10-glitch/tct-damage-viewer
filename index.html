@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Damage Tagging — TCT Point Cloud</title>
+<link rel="stylesheet" href="libs/potree/potree.css">
+<link rel="stylesheet" href="app.css">
+<script src="config.js"></script>
+<script src="libs/jquery-3.1.1.min.js"></script>
+<script src="libs/BinaryHeap.js"></script>
+<script src="libs/tween.min.js"></script>
+<script src="libs/proj4.js"></script>
+<script src="libs/i18next.js"></script>
+<script src="libs/potree/potree.js"></script>
+</head>
+<body>
+<div id="potree_render_area"></div>
+<div id="labels"></div>
+
+<header id="topbar">
+  <div class="brand">
+    <span class="title" id="projTitle">Point Cloud</span>
+    <span class="mode-badge" id="modeBadge" hidden>โหมดแก้ไข</span>
+  </div>
+  <div class="top-actions">
+    <button id="btnList" class="btn">รายการ (<span id="tagCount">0</span>)</button>
+    <button id="btnLegend" class="btn icon" title="คำอธิบายสัญลักษณ์">ⓘ</button>
+  </div>
+</header>
+
+<div id="editbar" hidden>
+  <button id="btnAddPin" class="btn primary">＋ ปักหมุด</button>
+  <button id="btnAddArea" class="btn primary">▱ วาดพื้นที่</button>
+  <button id="btnMore" class="btn">ไฟล์ ▾</button>
+  <div id="moreMenu" class="menu" hidden>
+    <button data-act="export">ดาวน์โหลด tags.json</button>
+    <button data-act="import">นำเข้า tags.json</button>
+    <button data-act="csv">ดาวน์โหลดตารางสรุป (CSV)</button>
+    <button data-act="discard">ล้างงานที่แก้ค้างในเครื่องนี้</button>
+  </div>
+  <input type="file" id="importFile" accept=".json,application/json" hidden>
+</div>
+
+<div id="drawbar" hidden>
+  <span id="drawHint">แตะบนโมเดลเพื่อวางจุด</span>
+  <button id="btnUndoPt" class="btn">ย้อนจุด</button>
+  <button id="btnFinish" class="btn primary">เสร็จ</button>
+  <button id="btnCancelDraw" class="btn">ยกเลิก</button>
+</div>
+
+<aside id="panel" hidden>
+  <div class="panel-head">
+    <h2 id="panelTitle"></h2>
+    <button id="btnClosePanel" class="btn icon" aria-label="ปิด">✕</button>
+  </div>
+  <div id="panelBody"></div>
+</aside>
+
+<div id="legend" class="popover" hidden>
+  <h3>ระดับความรุนแรง</h3>
+  <div id="legendItems"></div>
+  <p class="muted">● หมุด = ตำแหน่งความเสียหาย &nbsp; ▱ พื้นที่ = ขอบเขตความเสียหาย</p>
+  <p class="muted">แตะที่ป้ายบนโมเดลเพื่อดูรายละเอียด</p>
+</div>
+
+<div id="toast" hidden></div>
+<div id="loading">กำลังโหลดโมเดล…</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
