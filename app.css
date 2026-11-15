@@ -80,9 +80,19 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .auto{font-size:12px;color:var(--muted);margin-top:3px}
 
-/* รายการ */
+/* รายการ (แถบซ้าย) */
+#listPanel{position:absolute;z-index:19;top:52px;left:10px;bottom:10px;width:300px;background:var(--panel);
+  border:1px solid var(--line);border-radius:12px;display:flex;flex-direction:column;box-shadow:0 8px 30px #0008}
+.list-top{padding:10px 12px 0}
+#listItems{overflow:auto;flex:1;padding:0 6px 8px}
+.list-item.sel{background:#2f81f733;box-shadow:inset 3px 0 0 var(--accent)}
+.btn.on{background:var(--accent2);border-color:var(--accent2)}
+:root{--l:0px;--r:0px}
+body.list-open{--l:320px}
+body.panel-open{--r:400px}
+#editbar,#drawbar{left:calc(var(--l) + (100% - var(--l) - var(--r)) / 2)}
 .filters{display:flex;gap:6px;margin-bottom:10px}
-.filters select,.filters input{flex:1;background:#11161b;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px;font:inherit;font-size:13px}
+.filters select,.filters input{flex:1;min-width:0;background:#11161b;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px;font:inherit;font-size:13px}
 .list-item{display:flex;gap:10px;align-items:flex-start;padding:9px 6px;border-bottom:1px solid var(--line);cursor:pointer}
 .list-item:hover{background:#252d36}
 .list-item .meta{font-size:12px;color:var(--muted)}
@@ -99,7 +109,12 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 /* ซ่อน UI เดิมของ Potree */
 #potree_sidebar_container,#potree_quick_buttons,#potree_description{display:none!important}
 
+@media (max-width:900px){
+  body{--l:0px!important;--r:0px!important}
+}
 @media (max-width:700px){
+  #listPanel{width:auto;right:10px;bottom:auto;max-height:40vh;top:52px}
+  body.list-open #panel{max-height:48vh}
   #panel{top:auto;left:0;right:0;bottom:0;width:auto;max-height:62vh;border-radius:14px 14px 0 0}
   .popover{left:10px;right:10px;max-width:none}
   #editbar{bottom:10px}

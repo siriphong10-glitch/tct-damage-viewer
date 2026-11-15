@@ -49,6 +49,18 @@
   <button id="btnCancelDraw" class="btn">ยกเลิก</button>
 </div>
 
+<aside id="listPanel" hidden>
+  <div class="panel-head">
+    <h2>รายการความเสียหาย</h2>
+    <button id="btnCloseList" class="btn icon" aria-label="ปิดรายการ">✕</button>
+  </div>
+  <div class="list-top">
+    <div class="summary" id="listSummary"></div>
+    <div class="filters"><select id="fType"></select><select id="fSev"></select></div>
+  </div>
+  <div id="listItems"></div>
+</aside>
+
 <aside id="panel" hidden>
   <div class="panel-head">
     <h2 id="panelTitle"></h2>

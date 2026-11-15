@@ -146,6 +146,7 @@ async function loadTags() {
       if (d) { data = normalize(JSON.parse(d)); dirty = true; toast("เปิดงานที่แก้ค้างไว้ในเครื่องนี้ (ยังไม่ได้เผยแพร่)", 4000); }
     } catch (_) {}
   }
+  if (innerWidth > 900 && data.tags.length) setListOpen(true);
   rebuildAll();
   const tid = params.get("tag");
   if (tid) { const t = data.tags.find((x) => x.id === tid); if (t) { flyTo(t, false); showDetail(t.id); } else viewer.fitToScreen(); }
@@ -213,6 +214,7 @@ function rebuildAll() {
   data.tags.forEach(buildOverlay);
   renderLabels(true);
   $id("tagCount").textContent = data.tags.length;
+  renderList();
 }
 
 // ---------- labels (HTML overlay) ----------
@@ -405,12 +407,14 @@ function openPanel(title, html) {
   $id("panelTitle").textContent = title;
   $id("panelBody").innerHTML = html;
   $id("panel").hidden = false; $id("legend").hidden = true;
+  document.body.classList.add("panel-open");
 }
-function closePanel() { $id("panel").hidden = true; activeId = null; }
+function closePanel() { $id("panel").hidden = true; document.body.classList.remove("panel-open"); activeId = null; renderList(); }
 
 function showDetail(id) {
   const t = data.tags.find((x) => x.id === id); if (!t) return;
   activeId = id;
+  renderList();
   const s = sev(t.severity);
   const rows = [
     ["ประเภท", esc(t.type)],
@@ -570,30 +574,35 @@ function resizeImage(file, max = 1600, q = 0.8) {
 }
 
 // ---------- list ----------
-function showList() {
-  activeId = null;
+// แถบรายการด้านซ้าย — เปิดค้างไว้ได้ระหว่างดูรายละเอียดทางขวา
+let listOpen = false;
+function setListOpen(open) {
+  listOpen = open;
+  $id("listPanel").hidden = !open;
+  document.body.classList.toggle("list-open", open);
+  $id("btnList").classList.toggle("on", open);
+  if (open) renderList();
+}
+function renderList() {
+  if (!listOpen) return;
   const counts = SEVERITY.map((s) => `${s.label} ${data.tags.filter((t) => t.severity === s.key).length}`).join(" · ");
   const totalArea = data.tags.filter((t) => t.kind === "area").reduce((a, t) => a + (t.area || 0), 0);
-  const html = `<div class="summary">ทั้งหมด ${data.tags.length} รายการ · ${counts}<br>พื้นที่ความเสียหายรวม ${fmt(totalArea)} ตร.ม.</div>
-    <div class="filters">
-      <select id="fType"><option value="">ทุกประเภท</option>${DAMAGE_TYPES.map((d) => `<option>${esc(d)}</option>`).join("")}</select>
-      <select id="fSev"><option value="">ทุกระดับ</option>${SEVERITY.map((s) => `<option value="${s.key}">${s.label}</option>`).join("")}</select>
-    </div>
-    <div id="listItems"></div>`;
-  openPanel("รายการความเสียหาย", html);
-  const draw_ = () => {
-    const ft = $id("fType").value, fs = $id("fSev").value;
-    const items = [...data.tags].sort(byId).filter((t) => (!ft || t.type === ft) && (!fs || t.severity === +fs));
-    $id("listItems").innerHTML = items.length ? items.map((t) => `<div class="list-item" data-id="${esc(t.id)}">
-        <span class="dot" style="background:${sev(t.severity).color};margin-top:4px"></span>
-        <div><b>${esc(t.id)}</b> ${esc(t.type)}<div class="meta">${esc(t.element || "")}${t.kind === "area" ? ` · ${fmt(t.area)} ตร.ม.` : ""}${t.photos?.length ? ` · รูป ${t.photos.length}` : ""}</div></div>
-      </div>`).join("") : `<p class="muted">${data.tags.length ? "ไม่มีรายการตามตัวกรอง" : (EDIT ? "ยังไม่มีรายการ — ปิดหน้านี้ แล้วกด ＋ ปักหมุด หรือ ▱ วาดพื้นที่" : "ยังไม่มีรายการความเสียหาย")}</p>`;
-    $id("listItems").querySelectorAll(".list-item").forEach((el) => el.onclick = () => {
-      const t = data.tags.find((x) => x.id === el.dataset.id); flyTo(t); showDetail(t.id);
-    });
-  };
-  $id("fType").onchange = draw_; $id("fSev").onchange = draw_; draw_();
+  $id("listSummary").innerHTML = `ทั้งหมด ${data.tags.length} รายการ · ${counts}<br>พื้นที่ความเสียหายรวม ${fmt(totalArea)} ตร.ม.`;
+  const ft = $id("fType").value, fs = $id("fSev").value;
+  const items = [...data.tags].sort(byId).filter((t) => (!ft || t.type === ft) && (!fs || t.severity === +fs));
+  $id("listItems").innerHTML = items.length ? items.map((t) => `<div class="list-item${t.id === activeId ? " sel" : ""}" data-id="${esc(t.id)}">
+      <span class="dot" style="background:${sev(t.severity).color};margin-top:4px"></span>
+      <div><b>${esc(t.id)}</b> ${esc(t.type)}<div class="meta">${esc(t.element || "")}${t.kind === "area" ? ` · ${fmt(t.area)} ตร.ม.` : ""}${t.photos?.length ? ` · รูป ${t.photos.length}` : ""}</div></div>
+    </div>`).join("") : `<p class="muted">${data.tags.length ? "ไม่มีรายการตามตัวกรอง" : (EDIT ? "ยังไม่มีรายการ — กด ＋ ปักหมุด หรือ ▱ วาดพื้นที่" : "ยังไม่มีรายการความเสียหาย")}</p>`;
+  $id("listItems").querySelectorAll(".list-item").forEach((el) => el.onclick = () => {
+    const t = data.tags.find((x) => x.id === el.dataset.id); flyTo(t); showDetail(t.id);
+  });
+  $id("listItems").querySelector(".sel")?.scrollIntoView({ block: "nearest" });
 }
+$id("fType").innerHTML = `<option value="">ทุกประเภท</option>${DAMAGE_TYPES.map((d) => `<option>${esc(d)}</option>`).join("")}`;
+$id("fSev").innerHTML = `<option value="">ทุกระดับ</option>${SEVERITY.map((s) => `<option value="${s.key}">${s.label}</option>`).join("")}`;
+$id("fType").onchange = renderList; $id("fSev").onchange = renderList;
+$id("btnCloseList").onclick = () => setListOpen(false);
 
 // ---------- files ----------
 function download(name, text, type) {
@@ -624,8 +633,8 @@ $id("importFile").onchange = async (e) => {
 
 // ---------- UI wiring ----------
 function hideMenus() { $id("moreMenu").hidden = true; $id("legend").hidden = true; }
-$id("btnList").onclick = () => { hideMenus(); showList(); };
-$id("btnLegend").onclick = () => { const l = $id("legend"); l.hidden = !l.hidden; if (!l.hidden) closePanel(); };
+$id("btnList").onclick = () => { hideMenus(); setListOpen(!listOpen); };
+$id("btnLegend").onclick = () => { const l = $id("legend"); l.hidden = !l.hidden; };
 $id("legendItems").innerHTML = SEVERITY.map((s) => `<div class="sev-row"><span class="dot" style="background:${s.color}"></span>${s.key} — ${s.label}</div>`).join("");
 $id("btnClosePanel").onclick = closePanel;
 $id("btnAddPin").onclick = () => startDraw("pin");
