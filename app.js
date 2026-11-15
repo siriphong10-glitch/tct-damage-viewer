@@ -163,6 +163,19 @@ function saveDraft() {
 }
 
 // ---------- overlay geometry ----------
+// ให้พื้นที่ที่วาดถูกบังโดยผิวโมเดลที่อยู่ด้านหน้า (ไม่โปร่งแสง)
+// ดึงเข้าหากล้องเล็กน้อย (0.4% ของระยะ) เพื่อไม่ให้จุดของผิวเดียวกันบังตัวเอง
+const DEPTH_PULL = 0.004;
+function occludable(mat) {
+  mat.depthTest = true;
+  mat.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader.replace("#include <project_vertex>",
+      `vec4 mvPosition = modelViewMatrix * vec4( transformed, 1.0 );
+       mvPosition.xyz *= ${(1 - DEPTH_PULL).toFixed(4)};
+       gl_Position = projectionMatrix * mvPosition;`);
+  };
+  return mat;
+}
 function toLocal(arr) { return new THREE.Vector3(arr[0], arr[1], arr[2]).sub(origin); }
 function buildOverlay(t) {
   removeOverlay(t.id);
@@ -171,7 +184,7 @@ function buildOverlay(t) {
   const g = new THREE.Group();
   const loc = t.points.map(toLocal);
   const lineGeo = new THREE.BufferGeometry().setFromPoints([...loc, loc[0]]);
-  const line = new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color, depthTest: false, transparent: true }));
+  const line = new THREE.Line(lineGeo, occludable(new THREE.LineBasicMaterial({ color, transparent: true })));
   line.renderOrder = 10;
   g.add(line);
   const mtr = polygonMetrics(t.points.map((p) => new THREE.Vector3(...p)));
@@ -183,7 +196,7 @@ function buildOverlay(t) {
     for (const tri of tris) for (const i of tri) pos.push(loc[i].x, loc[i].y, loc[i].z);
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-    const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.28, side: THREE.DoubleSide, depthTest: false, depthWrite: false }));
+    const mesh = new THREE.Mesh(geo, occludable(new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.28, side: THREE.DoubleSide, depthWrite: false })));
     mesh.renderOrder = 9;
     g.add(mesh);
   }
@@ -195,6 +208,7 @@ function removeOverlay(id) {
   if (g) { overlayGroup.remove(g); g.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); }); overlays.delete(id); }
 }
 function rebuildAll() {
+  refreshOcclusion();
   for (const id of [...overlays.keys()]) removeOverlay(id);
   data.tags.forEach(buildOverlay);
   renderLabels(true);
@@ -223,17 +237,62 @@ function project(arr, cam, w, h) {
   _v.applyMatrix4({ elements: cam.matrixWorldInverse.elements }).applyMatrix4({ elements: cam.projectionMatrix.elements });
   return { x: (_v.x * 0.5 + 0.5) * w, y: (-_v.y * 0.5 + 0.5) * h, vis: _v.z < 1 && _v.z > -1 };
 }
+// ---------- occlusion (ซ่อนป้ายที่อยู่หลังผิวโมเดล) ----------
+// ยิงตรวจจากกล้องไปยังตำแหน่งป้าย ถ้าเจอผิวโมเดลก่อนถึงป้ายเกินค่าเผื่อ = ป้ายถูกบัง
+const occluded = new Map();      // id -> true/false
+let occQueue = [];
+let lastCamKey = "", camStillSince = 0, occDoneFor = "";
+const _ray = new THREE.Raycaster();
+function pickAt(x, y, win) {
+  const cam = viewer.scene.getActiveCamera();
+  const el = viewer.renderer.domElement;
+  _ray.setFromCamera({ x: (x / el.clientWidth) * 2 - 1, y: -(y / el.clientHeight) * 2 + 1 }, cam);
+  let best = null;
+  for (const pc of viewer.scene.pointclouds) {
+    const pt = pc.pick(viewer, cam, _ray.ray, { x, y: el.clientHeight - y, pickWindowSize: win, pickClipped: true });
+    if (!pt) continue;
+    const d = cam.position.distanceTo(pt.position);
+    if (!best || d < best) best = d;
+  }
+  return best;
+}
+function testOcclusion(t, cam, w, h) {
+  const p = project(t.position, cam, w, h);
+  if (!p.vis || p.x < 0 || p.y < 0 || p.x > w || p.y > h) return false;
+  const tagDist = cam.position.distanceTo(_v.set(...t.position));
+  const hit = pickAt(p.x, p.y, 9);
+  if (hit == null) return false;
+  const tol = Math.max(0.2, 0.015 * tagDist);
+  return hit < tagDist - tol;
+}
+function updateOcclusion(cam, w, h) {
+  const e = cam.matrixWorld.elements;
+  const key = e.map((v) => v.toFixed(3)).join(",") + w + "x" + h;
+  const now = performance.now();
+  if (key !== lastCamKey) { lastCamKey = key; camStillSince = now; occQueue = []; return; }
+  // ตรวจเมื่อกล้องหยุดนิ่ง แล้วตรวจซ้ำอีกครั้งหลังโมเดลโหลดรายละเอียดเพิ่ม
+  const stage = now - camStillSince > 1500 ? "2" : now - camStillSince > 120 ? "1" : "";
+  if (stage && occDoneFor !== key + stage && !occQueue.length) { occDoneFor = key + stage; occQueue = data.tags.map((t) => t.id); }
+  for (let i = 0; i < 4 && occQueue.length; i++) {
+    const t = data.tags.find((x) => x.id === occQueue.shift());
+    if (t) occluded.set(t.id, testOcclusion(t, cam, w, h));
+  }
+}
+function refreshOcclusion() { occDoneFor = ""; occQueue = []; }
+
 function tick() {
   const cam = viewer.scene.getActiveCamera();
   const host = $id("labels");
   const w = host.clientWidth, h = host.clientHeight;
   if (cam && cam.matrixWorldInverse) {
+    if (viewer.scene.pointclouds.length && data.tags.length) { try { updateOcclusion(cam, w, h); } catch (_) {} }
     for (const t of data.tags) {
       const el = labelEls.get(t.id); if (!el) continue;
       const p = project(t.position, cam, w, h);
       el.style.display = p.vis ? "" : "none";
       el.style.left = p.x + "px"; el.style.top = p.y + "px";
       el.classList.toggle("active", t.id === activeId);
+      el.classList.toggle("occluded", !!occluded.get(t.id) && t.id !== activeId);
     }
     if (draw) draw.points.forEach((pt, i) => {
       const el = draw.vertexEls[i]; const p = project([pt.x, pt.y, pt.z], cam, w, h);

@@ -55,6 +55,8 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
   border:1.5px solid #fff;box-shadow:0 1px 4px #000a;white-space:nowrap}
 .tag-label .stem{width:2px;height:10px;background:#fff}
 .tag-label .pin{width:9px;height:9px;border-radius:50%;background:#fff;margin-top:-1px;box-shadow:0 0 0 2px #0006}
+.tag-label{transition:opacity .15s}
+.tag-label.occluded{opacity:0;pointer-events:none}
 .tag-label.active .chip{outline:3px solid #fff;outline-offset:1px}
 .draw-vertex{position:absolute;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;
   background:#fff;border:3px solid var(--accent);pointer-events:none}
