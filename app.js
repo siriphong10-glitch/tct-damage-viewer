@@ -41,11 +41,23 @@ function toast(msg, ms = 2600) {
   const t = $id("toast"); t.textContent = msg; t.hidden = false;
   clearTimeout(toast._t); toast._t = setTimeout(() => (t.hidden = true), ms);
 }
+// เสนอรหัสถัดไปตามรูปแบบของรายการที่สร้างล่าสุด เช่น D-007 → D-008, C-12 → C-13
 function nextId() {
+  const last = [...data.tags].sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || ""))).pop();
+  const m0 = last && /^(.*?)(\d+)$/.exec(last.id);
+  const prefix = m0 ? m0[1] : "D-";
+  const width = m0 ? m0[2].length : 3;
   let max = 0;
-  for (const t of data.tags) { const m = /^D-(\d+)$/.exec(t.id); if (m) max = Math.max(max, +m[1]); }
-  return "D-" + String(max + 1).padStart(3, "0");
+  for (const t of data.tags) {
+    const m = /^(.*?)(\d+)$/.exec(t.id);
+    if (m && m[1] === prefix) max = Math.max(max, +m[2]);
+  }
+  let n = max + 1, id;
+  do { id = prefix + String(n++).padStart(width, "0"); } while (data.tags.some((t) => t.id === id));
+  return id;
 }
+// เรียงรหัสแบบธรรมชาติ (D-2 มาก่อน D-10)
+const byId = (a, b) => a.id.localeCompare(b.id, "th", { numeric: true, sensitivity: "base" });
 function today() { const d = new Date(); return d.toISOString().slice(0, 10); }
 
 // ---------- geometry ----------
@@ -402,6 +414,7 @@ function lightbox(src) {
 function showForm(id, draftTag) {
   const isNew = !id;
   const t = isNew ? { ...draftTag, id: nextId(), date: today(), photos: [] } : structuredClone(data.tags.find((x) => x.id === id));
+  const oldId = isNew ? null : t.id;
   activeId = t.id;
   const opt = (arr, val) => arr.map((a) => `<option ${a === val ? "selected" : ""}>${esc(a)}</option>`).join("");
   const sevOpt = SEVERITY.map((s) => `<option value="${s.key}" ${Number(t.severity) === s.key ? "selected" : ""}>${s.key} — ${s.label}</option>`).join("");
@@ -409,6 +422,9 @@ function showForm(id, draftTag) {
     ? `<label>พื้นที่ (คำนวณจากโมเดล)</label><input value="${fmt(t.area)} ตร.ม. · ${fmt(t.length)} × ${fmt(t.width)} ม." disabled>
        <div class="auto">คำนวณบนระนาบของพื้นที่ที่วาด (${tiltText(t.tilt)}) จึงใช้ได้ทั้งพื้น ผนัง และผิวเอียง</div>` : "";
   const html = `<form class="form" id="tagForm" autocomplete="off">
+    <label>รหัสความเสียหาย *</label>
+    <input name="tagId" value="${esc(t.id)}" required maxlength="30" placeholder="เช่น D-001 หรือ C-12">
+    <div class="auto" id="idMsg">ตั้งให้ตรงกับเลขรันในรายงานได้ ห้ามซ้ำกับรายการอื่น</div>
     <label>ประเภทความเสียหาย *</label>
     <select name="type" required><option value="">— เลือก —</option>${opt(DAMAGE_TYPES, t.type)}</select>
     <label>ระดับความรุนแรง *</label>
@@ -438,7 +454,7 @@ function showForm(id, draftTag) {
     <input type="file" id="photoInput" accept="image/*" multiple>
     <div class="photos" id="photoList"></div>
     <div class="actions">
-      <button class="btn primary" type="submit">บันทึก ${esc(t.id)}</button>
+      <button class="btn primary" type="submit">บันทึก</button>
       <button class="btn" type="button" id="fCancel">ยกเลิก</button>
     </div>
   </form>`;
@@ -460,10 +476,21 @@ function showForm(id, draftTag) {
     const fd = new FormData(form);
     for (const k of ["type", "severity", "element", "dimL", "dimW", "dimD", "crackWidth", "description", "note", "date", "inspector"]) t[k] = (fd.get(k) ?? "").toString().trim();
     t.severity = Number(t.severity);
+    const newId = (fd.get("tagId") ?? "").toString().trim();
+    const idErr = !newId ? "กรุณาใส่รหัส"
+      : /[?#&/\\"<>]/.test(newId) ? "รหัสห้ามมีอักขระ ? # & / \\ \" < >"
+      : data.tags.some((x) => x.id.toLowerCase() === newId.toLowerCase() && x.id !== oldId) ? `รหัส ${newId} มีอยู่แล้ว`
+      : "";
+    if (idErr) { const m = $id("idMsg"); m.textContent = idErr; m.style.color = "#f85149"; form.tagId.focus(); return; }
+    t.id = newId;
     if (t.type !== "รอยร้าว") delete t.crackWidth;
     t.updatedAt = new Date().toISOString();
     if (isNew) { t.createdAt = t.updatedAt; data.tags.push(t); }
-    else data.tags[data.tags.findIndex((x) => x.id === t.id)] = t;
+    else {
+      data.tags[data.tags.findIndex((x) => x.id === oldId)] = t;
+      if (oldId !== t.id) removeOverlay(oldId);
+    }
+    data.tags.sort(byId);
     try { localStorage.setItem("dmgtags-inspector", t.inspector); } catch (_) {}
     saveDraft(); rebuildAll(); showDetail(t.id);
     toast(`บันทึก ${t.id} ในเครื่องนี้แล้ว — ดาวน์โหลด tags.json เมื่อต้องการเผยแพร่`, 3500);
@@ -497,7 +524,7 @@ function showList() {
   openPanel("รายการความเสียหาย", html);
   const draw_ = () => {
     const ft = $id("fType").value, fs = $id("fSev").value;
-    const items = data.tags.filter((t) => (!ft || t.type === ft) && (!fs || t.severity === +fs));
+    const items = [...data.tags].sort(byId).filter((t) => (!ft || t.type === ft) && (!fs || t.severity === +fs));
     $id("listItems").innerHTML = items.length ? items.map((t) => `<div class="list-item" data-id="${esc(t.id)}">
         <span class="dot" style="background:${sev(t.severity).color};margin-top:4px"></span>
         <div><b>${esc(t.id)}</b> ${esc(t.type)}<div class="meta">${esc(t.element || "")}${t.kind === "area" ? ` · ${fmt(t.area)} ตร.ม.` : ""}${t.photos?.length ? ` · รูป ${t.photos.length}` : ""}</div></div>
@@ -524,7 +551,7 @@ function exportCsv() {
   const head = ["รหัส", "ชนิด", "ประเภทความเสียหาย", "ระดับความรุนแรง", "ตำแหน่ง/องค์อาคาร", "พื้นที่ (ตร.ม.)", "ยาวจากโมเดล (ม.)", "กว้างจากโมเดล (ม.)",
     "ยาววัดเพิ่ม (ม.)", "กว้างวัดเพิ่ม (ม.)", "ลึก (มม.)", "ความกว้างรอยร้าว (มม.)", "รายละเอียด", "หมายเหตุ", "วันที่ตรวจ", "ผู้ตรวจ", "E", "N", "Z", "จำนวนรูป", "ลิงก์"];
   const base = new URL(location.href); base.search = "";
-  const rows = data.tags.map((t) => [t.id, t.kind === "area" ? "พื้นที่" : "จุด", t.type, sev(t.severity).label, t.element, t.area ?? "", t.length ?? "", t.width ?? "",
+  const rows = [...data.tags].sort(byId).map((t) => [t.id, t.kind === "area" ? "พื้นที่" : "จุด", t.type, sev(t.severity).label, t.element, t.area ?? "", t.length ?? "", t.width ?? "",
     t.dimL, t.dimW, t.dimD, t.crackWidth, t.description, t.note, t.date, t.inspector, ...t.position, (t.photos || []).length, base + "?tag=" + t.id]);
   const csv = [head, ...rows].map((r) => r.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\r\n");
   download("damage-summary.csv", "﻿" + csv, "text/csv");
