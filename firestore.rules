@@ -1,5 +1,5 @@
 rules_version = '2';
-// TCT Damage Viewer — ทุกคนดูได้ / แก้ไขได้เฉพาะผู้ที่อยู่ในรายชื่อ / เจ้าของเท่านั้นที่แก้รายชื่อผู้แก้ไขได้
+// TCT Damage Viewer — ทุกคนดูได้ / แก้ไขได้เมื่อเปิดผ่านลิงก์แก้ไข (มีรหัสลับ) หรือเป็นเจ้าของ
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() {
@@ -8,10 +8,22 @@ service cloud.firestore {
     function isOwner() {
       return signedIn() && request.auth.token.email == 'siriphong10@gmail.com';
     }
+    // ผู้ที่เปิดลิงก์แก้ไข (มีรหัสลับ) จะได้สิทธิ์ผ่านเอกสาร grants/{uid}
+    function hasGrant() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/grants/$(request.auth.uid));
+    }
     function isEditor() {
-      return isOwner() || (signedIn()
+      return isOwner() || hasGrant() || (signedIn()
         && exists(/databases/$(database)/documents/config/editors)
         && request.auth.token.email in get(/databases/$(database)/documents/config/editors).data.emails);
+    }
+
+    match /grants/{uid} {
+      allow create: if request.auth != null && request.auth.uid == uid
+        && request.resource.data.key == '<EDIT_KEY — ดูใน Firebase console>';
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow update, delete: if false;
     }
 
     match /config/editors {

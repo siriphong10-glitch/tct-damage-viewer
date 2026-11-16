@@ -7,6 +7,19 @@ let EDIT = false;
 let store = null;               // Firebase store (หรือ null = อ่านจาก tags.json อย่างเดียว)
 let auth = { user: null, email: "", isEditor: false, isOwner: false, editors: [] };
 const photoCache = new Map();   // _doc -> { key, photos }
+// ลิงก์แก้ไข: ...#edit=<รหัส> — จำรหัสไว้ในเครื่อง เพื่อให้เปิดครั้งต่อไปแก้ไขได้ทันที
+const KEY_STORE = "dmgtags-editkey";
+(() => {
+  const m = /(?:^|[#&])edit=([A-Za-z0-9]+)/.exec(location.hash);
+  if (m) { try { localStorage.setItem(KEY_STORE, m[1]); } catch (_) {} C.editKey = m[1]; }
+  else { try { C.editKey = localStorage.getItem(KEY_STORE) || ""; } catch (_) {} }
+  C.onKeyRejected = () => {
+    try { localStorage.removeItem(KEY_STORE); } catch (_) {}
+    toast("ลิงก์แก้ไขนี้ใช้ไม่ได้แล้ว — เปิดดูได้อย่างเดียว", 6000);
+  };
+})();
+addEventListener("hashchange", () => { if (/(?:^|[#&])edit=/.test(location.hash)) location.reload(); });
+const shareUrl = () => { const u = new URL(location.href); u.search = ""; u.hash = ""; return u; };
 
 const SEVERITY = [
   { key: 1, label: "น้อย", color: "#3fb950" },
@@ -118,9 +131,10 @@ function applyAuth() {
   $id("modeBadge").hidden = !EDIT;
   if (!draw) $id("editbar").hidden = !EDIT;
   const b = $id("btnLogin");
-  if (!store) { b.hidden = true; return; }
+  $id("menuShare").hidden = !EDIT;
+  if (!store || (!params.has("admin") && !(auth.user && !auth.user.isAnonymous))) { b.hidden = true; $id("menuEditors").hidden = true; renderList(); return; }
   b.hidden = false;
-  if (!auth.user) { b.textContent = "เข้าสู่ระบบ"; b.title = "เข้าสู่ระบบเพื่อแก้ไข (เฉพาะผู้ที่ได้รับสิทธิ์)"; }
+  if (!auth.user || auth.user.isAnonymous) { b.textContent = "เข้าสู่ระบบ"; b.title = "เข้าสู่ระบบเพื่อแก้ไข (เฉพาะผู้ที่ได้รับสิทธิ์)"; }
   else { b.textContent = auth.email.split("@")[0] + (EDIT ? "" : " (ดูอย่างเดียว)"); b.title = auth.email + " — กดเพื่อดูตัวเลือก"; }
   $id("menuEditors").hidden = !auth.isOwner;
   if (panelMode === "detail" && activeDoc) { const t = data.tags.find((x) => x._doc === activeDoc); if (t) showDetail(t.id); }
@@ -165,6 +179,7 @@ async function loadTags() {
     applyAuth();
     return;
   }
+  window.dmgStore = store; // สำหรับตรวจสอบระบบ
   store.onAuth((a) => { auth = a; applyAuth(); });
   store.subscribe(onTags, (e) => { console.error(e); setSync("err", "โหลดข้อมูลไม่ได้"); });
   applyAuth();
@@ -521,9 +536,12 @@ function tiltText(tilt) {
   return `ผิวเอียง (ทำมุม ${tilt}° กับแนวราบ)`;
 }
 function copyLink(id) {
-  const u = new URL(location.href); u.search = ""; u.searchParams.set("tag", id);
+  const u = shareUrl(); u.searchParams.set("tag", id);
   const s = u.toString();
   (navigator.clipboard?.writeText(s) || Promise.reject()).then(() => toast("คัดลอกลิงก์แล้ว"), () => toast(s, 6000));
+}
+function copyText(s, msg) {
+  (navigator.clipboard?.writeText(s) || Promise.reject()).then(() => toast(msg, 4000), () => toast(s, 8000));
 }
 function lightbox(src) {
   const lb = document.createElement("div"); lb.id = "lightbox"; lb.innerHTML = `<img src="${src}">`;
@@ -699,7 +717,7 @@ async function exportJson() {
 function exportCsv() {
   const head = ["รหัส", "ชนิด", "ประเภทความเสียหาย", "ระดับความรุนแรง", "ตำแหน่ง/องค์อาคาร", "พื้นที่ (ตร.ม.)", "ยาวจากโมเดล (ม.)", "กว้างจากโมเดล (ม.)",
     "ยาววัดเพิ่ม (ม.)", "กว้างวัดเพิ่ม (ม.)", "ลึก (มม.)", "ความกว้างรอยร้าว (มม.)", "รายละเอียด", "หมายเหตุ", "วันที่ตรวจ", "ผู้ตรวจ", "E", "N", "Z", "จำนวนรูป", "ลิงก์"];
-  const base = new URL(location.href); base.search = "";
+  const base = shareUrl();
   const rows = [...data.tags].sort(byId).map((t) => [t.id, t.kind === "area" ? "พื้นที่" : "จุด", t.type, sev(t.severity).label, t.element, t.area ?? "", t.length ?? "", t.width ?? "",
     t.dimL, t.dimW, t.dimD, t.crackWidth, t.description, t.note, t.date, t.inspector, ...t.position, t.photoCount || 0, base + "?tag=" + t.id]);
   const csv = [head, ...rows].map((r) => r.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\r\n");
@@ -751,7 +769,7 @@ function showEditors() {
 }
 $id("btnLogin").onclick = async (e) => {
   e.stopPropagation();
-  if (!auth.user) {
+  if (!auth.user || auth.user.isAnonymous) {
     try { await store.signIn(); } catch (err) { if (err?.code !== "auth/popup-closed-by-user") toast("เข้าสู่ระบบไม่สำเร็จ: " + (err?.code || err?.message || err), 6000); }
     return;
   }
@@ -782,6 +800,8 @@ $id("moreMenu").onclick = (e) => {
   if (act === "import") $id("importFile").click();
   if (act === "csv") exportCsv();
   if (act === "editors") showEditors();
+  if (act === "share-view") copyText(shareUrl().toString(), "คัดลอกลิงก์ดูอย่างเดียวแล้ว");
+  if (act === "share-edit") { const u = shareUrl(); u.hash = "edit=" + C.editKey; copyText(u.toString(), "คัดลอกลิงก์แก้ไขแล้ว — ส่งให้เฉพาะคนที่ให้แก้ไขได้"); }
 };
 document.addEventListener("click", (e) => { if (!$id("moreMenu").contains(e.target) && e.target.id !== "btnMore") $id("moreMenu").hidden = true; });
 document.addEventListener("keydown", (e) => {
