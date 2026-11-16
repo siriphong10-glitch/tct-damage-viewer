@@ -80,6 +80,16 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .auto{font-size:12px;color:var(--muted);margin-top:3px}
 
+/* สถานะซิงก์ / ผู้ใช้ */
+.sync{font-size:12px;padding:2px 8px;border-radius:10px;background:#26303a;color:var(--muted);white-space:nowrap}
+.sync[data-state=ok]{color:#7ee787}
+.sync[data-state=busy]{color:#e3b341}
+.sync[data-state=off],.sync[data-state=err]{color:#ffa198}
+.user-menu{position:absolute;top:50px;right:10px;bottom:auto;z-index:30}
+.menu-info{padding:10px 14px;font-size:13px;color:var(--muted);border-bottom:1px solid var(--line);word-break:break-all}
+.editor-row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line);font-size:14px;word-break:break-all}
+.row-add{display:flex;gap:8px}
+
 /* รายการ (แถบซ้าย) */
 #listPanel{position:absolute;z-index:19;top:52px;left:10px;bottom:10px;width:300px;background:var(--panel);
   border:1px solid var(--line);border-radius:12px;display:flex;flex-direction:column;box-shadow:0 8px 30px #0008}
@@ -113,6 +123,7 @@ body.panel-open{--r:400px}
   body{--l:0px!important;--r:0px!important}
 }
 @media (max-width:700px){
+  .sync{display:none}
   #listPanel{width:auto;right:10px;bottom:auto;max-height:40vh;top:52px}
   body.list-open #panel{max-height:48vh}
   #panel{top:auto;left:0;right:0;bottom:0;width:auto;max-height:62vh;border-radius:14px 14px 0 0}

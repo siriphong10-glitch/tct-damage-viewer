@@ -1,0 +1,41 @@
+rules_version = '2';
+// TCT Damage Viewer — ทุกคนดูได้ / แก้ไขได้เฉพาะผู้ที่อยู่ในรายชื่อ / เจ้าของเท่านั้นที่แก้รายชื่อผู้แก้ไขได้
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+    function isOwner() {
+      return signedIn() && request.auth.token.email == 'siriphong10@gmail.com';
+    }
+    function isEditor() {
+      return isOwner() || (signedIn()
+        && exists(/databases/$(database)/documents/config/editors)
+        && request.auth.token.email in get(/databases/$(database)/documents/config/editors).data.emails);
+    }
+
+    match /config/editors {
+      allow read: if signedIn();
+      allow write: if isOwner()
+        && request.resource.data.emails is list
+        && request.resource.data.emails.size() <= 50;
+    }
+
+    match /projects/{project}/tags/{tagId} {
+      allow read: if true;
+      allow create, update: if isEditor()
+        && request.resource.data.id is string
+        && request.resource.data.id.size() > 0
+        && request.resource.data.id.size() <= 30;
+      allow delete: if isEditor();
+
+      match /photos/{photoId} {
+        allow read: if true;
+        allow create, update: if isEditor()
+          && request.resource.data.data is string
+          && request.resource.data.data.size() < 900000;
+        allow delete: if isEditor();
+      }
+    }
+  }
+}

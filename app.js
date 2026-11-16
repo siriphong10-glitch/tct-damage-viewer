@@ -2,8 +2,11 @@ import * as THREE from "./libs/three/three.module.js";
 
 const C = window.APP_CONFIG;
 const params = new URLSearchParams(location.search);
-const EDIT = params.get("edit") === "1";
-const DRAFT_KEY = "dmgtags-draft:" + C.pointCloudUrl;
+// สิทธิ์แก้ไขมาจากการล็อกอิน (ผู้ที่อยู่ในรายชื่อผู้แก้ไข)
+let EDIT = false;
+let store = null;               // Firebase store (หรือ null = อ่านจาก tags.json อย่างเดียว)
+let auth = { user: null, email: "", isEditor: false, isOwner: false, editors: [] };
+const photoCache = new Map();   // _doc -> { key, photos }
 
 const SEVERITY = [
   { key: 1, label: "น้อย", color: "#3fb950" },
@@ -31,7 +34,9 @@ let overlayGroup = null;
 const overlays = new Map(); // id -> {group}
 let activeId = null;
 let draw = null; // {kind, points:[Vector3], line}
-let dirty = false;
+let panelMode = "";      // "detail" | "form" | "editors" | ""
+let activeDoc = null;    // _doc ของรายการที่เปิดดูอยู่
+let firstLoad = true;
 
 // ---------- helpers ----------
 const $id = (id) => document.getElementById(id);
@@ -108,7 +113,19 @@ viewer.setMinNodeSize(30);
 
 $id("projTitle").textContent = C.projectTitle;
 document.title = C.projectTitle;
-if (EDIT) { $id("modeBadge").hidden = false; $id("editbar").hidden = false; }
+function applyAuth() {
+  EDIT = !!auth.isEditor;
+  $id("modeBadge").hidden = !EDIT;
+  if (!draw) $id("editbar").hidden = !EDIT;
+  const b = $id("btnLogin");
+  if (!store) { b.hidden = true; return; }
+  b.hidden = false;
+  if (!auth.user) { b.textContent = "เข้าสู่ระบบ"; b.title = "เข้าสู่ระบบเพื่อแก้ไข (เฉพาะผู้ที่ได้รับสิทธิ์)"; }
+  else { b.textContent = auth.email.split("@")[0] + (EDIT ? "" : " (ดูอย่างเดียว)"); b.title = auth.email + " — กดเพื่อดูตัวเลือก"; }
+  $id("menuEditors").hidden = !auth.isOwner;
+  if (panelMode === "detail" && activeDoc) { const t = data.tags.find((x) => x._doc === activeDoc); if (t) showDetail(t.id); }
+  renderList();
+}
 
 Potree.loadPointCloud(C.pointCloudUrl, "cloud", (e) => {
   const pc = e.pointcloud;
@@ -136,20 +153,45 @@ Potree.loadPointCloud(C.pointCloudUrl, "cloud", (e) => {
 setTimeout(() => { if (!$id("loading").hidden) $id("loading").textContent = "กำลังโหลดโมเดล… (ถ้านานผิดปกติ ให้ตรวจการเชื่อมต่ออินเทอร์เน็ต)"; }, 15000);
 
 async function loadTags() {
-  try {
-    const r = await fetch(C.tagsUrl, { cache: "no-cache" });
-    if (r.ok) data = normalize(await r.json());
-  } catch (_) {}
-  if (EDIT) {
+  if (C.mockStore || C.firebase) {
     try {
-      const d = localStorage.getItem(DRAFT_KEY);
-      if (d) { data = normalize(JSON.parse(d)); dirty = true; toast("เปิดงานที่แก้ค้างไว้ในเครื่องนี้ (ยังไม่ได้เผยแพร่)", 4000); }
-    } catch (_) {}
+      if (C.mockStore) store = (await import(C.mockStore)).createMockStore(C);
+      else store = (await import("./libs/store.bundle.js")).createFirebaseStore(C);
+    } catch (e) { console.error(e); store = null; toast("เชื่อมต่อฐานข้อมูลไม่ได้ — แสดงข้อมูลสำรอง", 5000); }
   }
-  if (innerWidth > 900 && data.tags.length) setListOpen(true);
+  if (!store) {
+    try { const r = await fetch(C.tagsUrl, { cache: "no-cache" }); if (r.ok) onTags(normalize(await r.json()).tags, {}); } catch (_) {}
+    if (firstLoad) onTags([], {});
+    applyAuth();
+    return;
+  }
+  store.onAuth((a) => { auth = a; applyAuth(); });
+  store.subscribe(onTags, (e) => { console.error(e); setSync("err", "โหลดข้อมูลไม่ได้"); });
+  applyAuth();
+}
+function onTags(tags, meta) {
+  data.tags = tags.filter((t) => t && t.id && Array.isArray(t.position)).sort(byId);
   rebuildAll();
-  const tid = params.get("tag");
-  if (tid) { const t = data.tags.find((x) => x.id === tid); if (t) { flyTo(t, false); showDetail(t.id); } else viewer.fitToScreen(); }
+  if (store) {
+    if (meta.pending) setSync("busy", "กำลังบันทึก…");
+    else if (meta.fromCache && !navigator.onLine) setSync("off", "ออฟไลน์ — จะบันทึกขึ้นออนไลน์เมื่อมีสัญญาณ");
+    else setSync("ok", EDIT ? "บันทึกออนไลน์แล้ว" : "ข้อมูลล่าสุด");
+  }
+  // อัปเดตรายละเอียดที่เปิดอยู่ ถ้ามีคนอื่นแก้
+  if (panelMode === "detail" && activeDoc) {
+    const t = data.tags.find((x) => x._doc === activeDoc);
+    if (t) showDetail(t.id); else { closePanel(); toast("รายการที่เปิดอยู่ถูกลบแล้ว"); }
+  }
+  if (firstLoad) {
+    firstLoad = false;
+    if (innerWidth > 900 && data.tags.length) setListOpen(true);
+    const tid = params.get("tag");
+    if (tid) { const t = data.tags.find((x) => x.id === tid); if (t) { flyTo(t, false); showDetail(t.id); } else viewer.fitToScreen(); }
+  }
+}
+function setSync(state, text) {
+  const el = $id("syncState");
+  el.hidden = false; el.dataset.state = state; el.textContent = text;
 }
 function normalize(d) {
   if (Array.isArray(d)) d = { version: 1, tags: d };
@@ -157,10 +199,19 @@ function normalize(d) {
   d.project = d.project || C.projectTitle;
   return d;
 }
-function saveDraft() {
-  dirty = true;
-  try { localStorage.setItem(DRAFT_KEY, JSON.stringify(data)); }
-  catch (e) { toast("บันทึกในเครื่องไม่ได้ (พื้นที่เต็ม?) — ให้ดาวน์โหลด tags.json ไว้ก่อน", 5000); }
+// เขียนลงฐานข้อมูล — หน้าจอจะอัปเดตเองจากข้อมูลที่ซิงก์กลับมา
+async function writeTag(t, photos) {
+  try { await store.saveTag(t, photos); }
+  catch (e) { console.error(e); toast(e?.code === "permission-denied" ? "บันทึกไม่สำเร็จ: บัญชีนี้ไม่มีสิทธิ์แก้ไข" : "บันทึกไม่สำเร็จ: " + (e?.message || e), 6000); throw e; }
+}
+async function getPhotos(t) {
+  if (!t._doc || !store || !t.photoCount) return t.photos || [];
+  const key = t._doc + "|" + (t.updatedAt || "") + "|" + t.photoCount;
+  const c = photoCache.get(t._doc);
+  if (c && c.key === key) return c.photos;
+  const photos = await store.loadPhotos(t._doc);
+  photoCache.set(t._doc, { key, photos });
+  return photos;
 }
 
 // ---------- overlay geometry ----------
@@ -409,11 +460,11 @@ function openPanel(title, html) {
   $id("panel").hidden = false; $id("legend").hidden = true;
   document.body.classList.add("panel-open");
 }
-function closePanel() { $id("panel").hidden = true; document.body.classList.remove("panel-open"); activeId = null; renderList(); }
+function closePanel() { $id("panel").hidden = true; document.body.classList.remove("panel-open"); activeId = null; activeDoc = null; panelMode = ""; renderList(); }
 
 function showDetail(id) {
   const t = data.tags.find((x) => x.id === id); if (!t) return;
-  activeId = id;
+  activeId = id; activeDoc = t._doc || null; panelMode = "detail";
   renderList();
   const s = sev(t.severity);
   const rows = [
@@ -434,8 +485,9 @@ function showDetail(id) {
   rows.push(["วันที่ตรวจ", esc(t.date || "-")]);
   rows.push(["ผู้ตรวจ", esc(t.inspector || "-")]);
   rows.push(["พิกัด (UTM 47N)", `E ${fmt(t.position[0], 3)}<br>N ${fmt(t.position[1], 3)}<br>Z ${fmt(t.position[2], 3)}`]);
-  const photos = (t.photos || []).length
-    ? `<div class="photos">${t.photos.map((p, i) => `<img src="${p}" data-i="${i}" alt="รูปที่ ${i + 1}">`).join("")}</div>` : "";
+  if (t.updatedBy) rows.push(["แก้ไขล่าสุดโดย", esc(t.updatedBy) + (t.updatedAt ? `<br><span class="muted">${esc(new Date(t.updatedAt).toLocaleString("th-TH"))}</span>` : "")]);
+  const nPhotos = t.photoCount ?? (t.photos || []).length;
+  const photos = nPhotos ? `<div class="photos" id="dPhotos"><span class="muted">กำลังโหลดรูป ${nPhotos} รูป…</span></div>` : "";
   const html = `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>${photos}
     <div class="actions">
       <button class="btn" id="dFly">ไปที่ตำแหน่งนี้</button>
@@ -443,16 +495,21 @@ function showDetail(id) {
       ${EDIT ? `<button class="btn primary" id="dEdit">แก้ไข</button><button class="btn danger" id="dDel">ลบ</button>` : ""}
     </div>`;
   openPanel(`${t.id} · ${t.kind === "area" ? "พื้นที่ความเสียหาย" : "จุดความเสียหาย"}`, html);
+  panelMode = "detail";
   $id("dFly").onclick = () => flyTo(t);
   $id("dLink").onclick = () => copyLink(t.id);
-  $id("panelBody").querySelectorAll(".photos img").forEach((img) => img.onclick = () => lightbox(img.src));
+  if (nPhotos) getPhotos(t).then((ps) => {
+    const box = $id("dPhotos"); if (!box || activeDoc !== (t._doc || null)) return;
+    box.innerHTML = ps.map((p, i) => `<img src="${p}" alt="รูปที่ ${i + 1}">`).join("");
+    box.querySelectorAll("img").forEach((img) => img.onclick = () => lightbox(img.src));
+  }).catch(() => { const box = $id("dPhotos"); if (box) box.innerHTML = `<span class="muted">โหลดรูปไม่ได้</span>`; });
   if (EDIT) {
     $id("dEdit").onclick = () => showForm(t.id);
     const del = $id("dDel");
     del.onclick = () => {
       if (del.dataset.armed) {
-        data.tags = data.tags.filter((x) => x.id !== t.id); removeOverlay(t.id); saveDraft(); rebuildAll(); closePanel();
-        toast(`ลบ ${t.id} แล้ว`);
+        closePanel();
+        store.deleteTag(t._doc).then(() => toast(`ลบ ${t.id} แล้ว`), (e) => toast(e?.code === "permission-denied" ? "ลบไม่สำเร็จ: ไม่มีสิทธิ์" : "ลบไม่สำเร็จ", 5000));
       } else { del.dataset.armed = "1"; del.textContent = "กดอีกครั้งเพื่อยืนยันการลบ"; }
     };
   }
@@ -478,7 +535,9 @@ function showForm(id, draftTag) {
   const isNew = !id;
   const t = isNew ? { ...draftTag, id: nextId(), date: today(), photos: [] } : structuredClone(data.tags.find((x) => x.id === id));
   const oldId = isNew ? null : t.id;
-  activeId = t.id;
+  activeId = t.id; activeDoc = t._doc || null;
+  let photosChanged = isNew, photosReady = isNew;
+  if (!isNew) t.photos = [];
   const opt = (arr, val) => arr.map((a) => `<option ${a === val ? "selected" : ""}>${esc(a)}</option>`).join("");
   const sevOpt = SEVERITY.map((s) => `<option value="${s.key}" ${Number(t.severity) === s.key ? "selected" : ""}>${s.key} — ${s.label}</option>`).join("");
   const areaInfo = t.kind === "area"
@@ -522,19 +581,26 @@ function showForm(id, draftTag) {
     </div>
   </form>`;
   openPanel(isNew ? `เพิ่ม ${t.id}` : `แก้ไข ${t.id}`, html);
+  panelMode = "form";
   const form = $id("tagForm");
   form.type.onchange = () => ($id("crackRow").hidden = form.type.value !== "รอยร้าว");
   const renderPhotos = () => {
     $id("photoList").innerHTML = t.photos.map((p, i) => `<div class="photo-wrap"><img src="${p}"><button type="button" class="btn rm" data-i="${i}">✕</button></div>`).join("");
-    $id("photoList").querySelectorAll(".rm").forEach((b) => b.onclick = () => { t.photos.splice(+b.dataset.i, 1); renderPhotos(); });
+    $id("photoList").querySelectorAll(".rm").forEach((b) => b.onclick = () => { t.photos.splice(+b.dataset.i, 1); photosChanged = true; renderPhotos(); });
   };
   renderPhotos();
+  if (!isNew) {
+    const orig = data.tags.find((x) => x.id === id);
+    if (orig.photoCount) $id("photoList").innerHTML = `<span class="muted">กำลังโหลดรูปเดิม…</span>`;
+    getPhotos(orig).then((ps) => { if (!photosChanged) { t.photos = [...ps]; } photosReady = true; if ($id("tagForm") === form) renderPhotos(); })
+      .catch(() => { photosReady = false; $id("photoList").innerHTML = `<span class="muted">โหลดรูปเดิมไม่ได้ — รูปเดิมจะไม่ถูกเปลี่ยน</span>`; });
+  }
   $id("photoInput").onchange = async (e) => {
-    for (const f of e.target.files) { try { t.photos.push(await resizeImage(f)); } catch (_) { toast("อ่านรูปไม่ได้: " + f.name); } }
+    for (const f of e.target.files) { try { t.photos.push(await resizeImage(f)); photosChanged = true; } catch (_) { toast("อ่านรูปไม่ได้: " + f.name); } }
     e.target.value = ""; renderPhotos();
   };
   $id("fCancel").onclick = () => { if (isNew) closePanel(); else showDetail(t.id); };
-  form.onsubmit = (e) => {
+  form.onsubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(form);
     for (const k of ["type", "severity", "element", "dimL", "dimW", "dimD", "crackWidth", "description", "note", "date", "inspector"]) t[k] = (fd.get(k) ?? "").toString().trim();
@@ -548,26 +614,35 @@ function showForm(id, draftTag) {
     t.id = newId;
     if (t.type !== "รอยร้าว") delete t.crackWidth;
     t.updatedAt = new Date().toISOString();
-    if (isNew) { t.createdAt = t.updatedAt; data.tags.push(t); }
-    else {
-      data.tags[data.tags.findIndex((x) => x.id === oldId)] = t;
-      if (oldId !== t.id) removeOverlay(oldId);
-    }
-    data.tags.sort(byId);
+    if (isNew) { t.createdAt = t.updatedAt; t._doc = store.newId(); }
     try { localStorage.setItem("dmgtags-inspector", t.inspector); } catch (_) {}
-    saveDraft(); rebuildAll(); showDetail(t.id);
-    toast(`บันทึก ${t.id} ในเครื่องนี้แล้ว — ดาวน์โหลด tags.json เมื่อต้องการเผยแพร่`, 3500);
+    const photos = (photosChanged && (isNew || photosReady)) ? t.photos : null;
+    if (photos) photoCache.set(t._doc, { key: t._doc + "|" + t.updatedAt + "|" + photos.length, photos: [...photos] });
+    const btn = form.querySelector("button[type=submit]"); btn.disabled = true; btn.textContent = "กำลังบันทึก…";
+    const saving = writeTag({ ...t, photos: undefined, photoCount: photos ? photos.length : t.photoCount }, photos);
+    // แสดงผลทันที (ข้อมูลในเครื่องอัปเดตก่อน แล้วซิงก์ขึ้นออนไลน์ตามหลัง)
+    activeDoc = t._doc; panelMode = "detail";
+    setTimeout(() => { const nt = data.tags.find((x) => x._doc === t._doc); if (nt) showDetail(nt.id); }, 50);
+    saving.then(() => toast(`บันทึก ${t.id} ออนไลน์แล้ว`), () => { if ($id("tagForm") === form) { btn.disabled = false; btn.textContent = "บันทึก"; } });
   };
 }
 function lastInspector() { try { return localStorage.getItem("dmgtags-inspector") || ""; } catch (_) { return ""; } }
+// ย่อรูปให้ไม่เกิน ~800 KB ต่อรูป (ข้อจำกัดของฐานข้อมูล)
 function resizeImage(file, max = 1600, q = 0.8) {
   return new Promise((res, rej) => {
     const img = new Image(); const url = URL.createObjectURL(file);
     img.onload = () => {
-      const s = Math.min(1, max / Math.max(img.width, img.height));
-      const cv = document.createElement("canvas"); cv.width = Math.round(img.width * s); cv.height = Math.round(img.height * s);
-      cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
-      URL.revokeObjectURL(url); res(cv.toDataURL("image/jpeg", q));
+      URL.revokeObjectURL(url);
+      let m = max, qq = q, out = "";
+      for (let i = 0; i < 8; i++) {
+        const s = Math.min(1, m / Math.max(img.width, img.height));
+        const cv = document.createElement("canvas"); cv.width = Math.round(img.width * s); cv.height = Math.round(img.height * s);
+        cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+        out = cv.toDataURL("image/jpeg", qq);
+        if (out.length < 800000) break;
+        if (qq > 0.6) qq -= 0.1; else m = Math.round(m * 0.8);
+      }
+      res(out);
     };
     img.onerror = rej; img.src = url;
   });
@@ -592,7 +667,7 @@ function renderList() {
   const items = [...data.tags].sort(byId).filter((t) => (!ft || t.type === ft) && (!fs || t.severity === +fs));
   $id("listItems").innerHTML = items.length ? items.map((t) => `<div class="list-item${t.id === activeId ? " sel" : ""}" data-id="${esc(t.id)}">
       <span class="dot" style="background:${sev(t.severity).color};margin-top:4px"></span>
-      <div><b>${esc(t.id)}</b> ${esc(t.type)}<div class="meta">${esc(t.element || "")}${t.kind === "area" ? ` · ${fmt(t.area)} ตร.ม.` : ""}${t.photos?.length ? ` · รูป ${t.photos.length}` : ""}</div></div>
+      <div><b>${esc(t.id)}</b> ${esc(t.type)}<div class="meta">${esc(t.element || "")}${t.kind === "area" ? ` · ${fmt(t.area)} ตร.ม.` : ""}${t.photoCount ? ` · รูป ${t.photoCount}` : ""}</div></div>
     </div>`).join("") : `<p class="muted">${data.tags.length ? "ไม่มีรายการตามตัวกรอง" : (EDIT ? "ยังไม่มีรายการ — กด ＋ ปักหมุด หรือ ▱ วาดพื้นที่" : "ยังไม่มีรายการความเสียหาย")}</p>`;
   $id("listItems").querySelectorAll(".list-item").forEach((el) => el.onclick = () => {
     const t = data.tags.find((x) => x.id === el.dataset.id); flyTo(t); showDetail(t.id);
@@ -610,26 +685,84 @@ function download(name, text, type) {
   a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name;
   document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
-function exportJson() {
-  data.exportedAt = new Date().toISOString();
-  download("tags.json", JSON.stringify(data, null, 1), "application/json");
-  toast("ดาวน์โหลด tags.json แล้ว — นำไปแทนไฟล์เดิมบนเว็บเพื่อเผยแพร่", 4000);
+async function exportJson() {
+  toast("กำลังรวบรวมข้อมูลและรูป…", 8000);
+  const tags = [];
+  for (const t of data.tags) {
+    const c = { ...t }; delete c._doc; delete c._pending; delete c.serverUpdatedAt;
+    try { c.photos = await getPhotos(t); } catch (_) { c.photos = []; }
+    tags.push(c);
+  }
+  download("tags-backup.json", JSON.stringify({ version: 1, project: C.projectTitle, exportedAt: new Date().toISOString(), tags }, null, 1), "application/json");
+  toast("ดาวน์โหลดไฟล์สำรองแล้ว", 3000);
 }
 function exportCsv() {
   const head = ["รหัส", "ชนิด", "ประเภทความเสียหาย", "ระดับความรุนแรง", "ตำแหน่ง/องค์อาคาร", "พื้นที่ (ตร.ม.)", "ยาวจากโมเดล (ม.)", "กว้างจากโมเดล (ม.)",
     "ยาววัดเพิ่ม (ม.)", "กว้างวัดเพิ่ม (ม.)", "ลึก (มม.)", "ความกว้างรอยร้าว (มม.)", "รายละเอียด", "หมายเหตุ", "วันที่ตรวจ", "ผู้ตรวจ", "E", "N", "Z", "จำนวนรูป", "ลิงก์"];
   const base = new URL(location.href); base.search = "";
   const rows = [...data.tags].sort(byId).map((t) => [t.id, t.kind === "area" ? "พื้นที่" : "จุด", t.type, sev(t.severity).label, t.element, t.area ?? "", t.length ?? "", t.width ?? "",
-    t.dimL, t.dimW, t.dimD, t.crackWidth, t.description, t.note, t.date, t.inspector, ...t.position, (t.photos || []).length, base + "?tag=" + t.id]);
+    t.dimL, t.dimW, t.dimD, t.crackWidth, t.description, t.note, t.date, t.inspector, ...t.position, t.photoCount || 0, base + "?tag=" + t.id]);
   const csv = [head, ...rows].map((r) => r.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\r\n");
   download("damage-summary.csv", "﻿" + csv, "text/csv");
 }
 $id("importFile").onchange = async (e) => {
   const f = e.target.files[0]; if (!f) return;
-  try { data = normalize(JSON.parse(await f.text())); saveDraft(); rebuildAll(); toast(`นำเข้า ${data.tags.length} รายการแล้ว`); }
-  catch (_) { toast("ไฟล์ไม่ถูกต้อง"); }
+  let incoming;
+  try { incoming = normalize(JSON.parse(await f.text())).tags; } catch (_) { toast("ไฟล์ไม่ถูกต้อง"); e.target.value = ""; return; }
+  let n = 0;
+  toast(`กำลังนำเข้า ${incoming.length} รายการ…`, 10000);
+  for (const t of incoming) {
+    const ex = data.tags.find((x) => x.id === t.id);
+    const photos = Array.isArray(t.photos) ? t.photos : [];
+    const tag = { ...t, _doc: ex?._doc || store.newId(), photos: undefined, photoCount: photos.length };
+    try { await writeTag(tag, photos); n++; } catch (_) { break; }
+  }
+  toast(`นำเข้า ${n} จาก ${incoming.length} รายการแล้ว (รหัสที่ซ้ำจะเขียนทับรายการเดิม)`, 5000);
   e.target.value = "";
 };
+
+// ---------- ผู้แก้ไข (เฉพาะเจ้าของ) ----------
+function showEditors() {
+  let list = [...auth.editors];
+  openPanel("จัดการผู้แก้ไข", "");
+  panelMode = "editors";
+  const draw_ = () => {
+    $id("panelBody").innerHTML = `<p class="muted">คนที่ได้ link ดูได้ทุกคน แต่จะเพิ่ม แก้ หรือลบรายการได้เฉพาะบัญชี Google ในรายชื่อนี้ (เจ้าของ ${esc(C.ownerEmail)} แก้ได้เสมอ)</p>
+      <div class="form">
+        ${list.length ? list.map((e, i) => `<div class="editor-row"><span>${esc(e)}</span><button class="btn" data-i="${i}">ลบ</button></div>`).join("") : `<p class="muted">ยังไม่มีผู้แก้ไขเพิ่มเติม</p>`}
+        <label>เพิ่มอีเมล (บัญชี Google)</label>
+        <div class="row-add"><input id="edNew" type="email" placeholder="name@gmail.com"><button class="btn" id="edAdd">เพิ่ม</button></div>
+        <div class="auto" id="edMsg"></div>
+        <div class="actions"><button class="btn primary" id="edSave">บันทึกรายชื่อ</button></div>
+      </div>`;
+    $id("panelBody").querySelectorAll(".editor-row button").forEach((b) => b.onclick = () => { list.splice(+b.dataset.i, 1); draw_(); });
+    $id("edAdd").onclick = () => {
+      const v = $id("edNew").value.trim().toLowerCase();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) { $id("edMsg").textContent = "รูปแบบอีเมลไม่ถูกต้อง"; return; }
+      if (!list.includes(v)) list.push(v);
+      draw_();
+    };
+    $id("edSave").onclick = async () => {
+      try { await store.setEditors(list); toast("บันทึกรายชื่อผู้แก้ไขแล้ว"); closePanel(); }
+      catch (e) { $id("edMsg").textContent = "บันทึกไม่สำเร็จ: " + (e?.code || e?.message || e); }
+    };
+  };
+  draw_();
+}
+$id("btnLogin").onclick = async (e) => {
+  e.stopPropagation();
+  if (!auth.user) {
+    try { await store.signIn(); } catch (err) { if (err?.code !== "auth/popup-closed-by-user") toast("เข้าสู่ระบบไม่สำเร็จ: " + (err?.code || err?.message || err), 6000); }
+    return;
+  }
+  const m = $id("userMenu");
+  $id("userEmail").textContent = auth.email + (EDIT ? (auth.isOwner ? " · เจ้าของ" : " · ผู้แก้ไข") : " · ไม่มีสิทธิ์แก้ไข");
+  m.hidden = !m.hidden;
+};
+$id("btnLogout").onclick = () => { $id("userMenu").hidden = true; store.signOut(); cancelDraw(); if (panelMode === "form" || panelMode === "editors") closePanel(); };
+document.addEventListener("click", (e) => { if (!$id("userMenu").contains(e.target)) $id("userMenu").hidden = true; });
+addEventListener("online", () => setSync("busy", "กำลังซิงก์…"));
+addEventListener("offline", () => setSync("off", "ออฟไลน์ — จะบันทึกขึ้นออนไลน์เมื่อมีสัญญาณ"));
 
 // ---------- UI wiring ----------
 function hideMenus() { $id("moreMenu").hidden = true; $id("legend").hidden = true; }
@@ -648,10 +781,7 @@ $id("moreMenu").onclick = (e) => {
   if (act === "export") exportJson();
   if (act === "import") $id("importFile").click();
   if (act === "csv") exportCsv();
-  if (act === "discard") {
-    try { localStorage.removeItem(DRAFT_KEY); } catch (_) {}
-    toast("ล้างงานที่แก้ค้างแล้ว กำลังโหลดข้อมูลที่เผยแพร่อยู่…"); dirty = false; setTimeout(() => location.reload(), 800);
-  }
+  if (act === "editors") showEditors();
 };
 document.addEventListener("click", (e) => { if (!$id("moreMenu").contains(e.target) && e.target.id !== "btnMore") $id("moreMenu").hidden = true; });
 document.addEventListener("keydown", (e) => {

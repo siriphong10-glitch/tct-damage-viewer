@@ -22,10 +22,16 @@
   <div class="brand">
     <span class="title" id="projTitle">Point Cloud</span>
     <span class="mode-badge" id="modeBadge" hidden>โหมดแก้ไข</span>
+    <span class="sync" id="syncState" hidden></span>
   </div>
   <div class="top-actions">
     <button id="btnList" class="btn">รายการ (<span id="tagCount">0</span>)</button>
     <button id="btnLegend" class="btn icon" title="คำอธิบายสัญลักษณ์">ⓘ</button>
+    <button id="btnLogin" class="btn" hidden>เข้าสู่ระบบ</button>
+  </div>
+  <div id="userMenu" class="menu user-menu" hidden>
+    <div class="menu-info" id="userEmail"></div>
+    <button id="btnLogout">ออกจากระบบ</button>
   </div>
 </header>
 
@@ -34,10 +40,10 @@
   <button id="btnAddArea" class="btn primary">▱ วาดพื้นที่</button>
   <button id="btnMore" class="btn">ไฟล์ ▾</button>
   <div id="moreMenu" class="menu" hidden>
-    <button data-act="export">ดาวน์โหลด tags.json</button>
-    <button data-act="import">นำเข้า tags.json</button>
     <button data-act="csv">ดาวน์โหลดตารางสรุป (CSV)</button>
-    <button data-act="discard">ล้างงานที่แก้ค้างในเครื่องนี้</button>
+    <button data-act="export">ดาวน์โหลดไฟล์สำรอง (JSON)</button>
+    <button data-act="import">นำเข้าจากไฟล์ JSON</button>
+    <button data-act="editors" id="menuEditors" hidden>จัดการผู้แก้ไข</button>
   </div>
   <input type="file" id="importFile" accept=".json,application/json" hidden>
 </div>
