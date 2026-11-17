@@ -187,7 +187,7 @@ async function loadTags() {
   store.onAuth((a) => { auth = a; applyAuth(); });
   store.subscribe(onTags, (e) => { console.error(e); setSync("err", "โหลดข้อมูลไม่ได้"); });
   if (store.subscribeMeta) store.subscribeMeta("grid", (m) => setGridMeta(m));
-  if (store.subscribeMeta) store.subscribeMeta("savepoint", (m) => { savepoint = m; if (panelMode === "savepoint") showSavepointPanel(); });
+  if (store.subscribeMeta) SP_KEYS.forEach((k) => store.subscribeMeta(k, (m) => { if (m) savepoints[k] = m; else delete savepoints[k]; if (panelMode === "savepoint") showSavepointPanel(); }));
   applyAuth();
 }
 let pendingTags = null, tagTimer = 0;
@@ -1027,44 +1027,67 @@ function showDeletePanel(scope) {
   };
 }
 
-// ---------- จุด save (ย้อนกลับมาที่สถานะกริดที่วางเสร็จแล้ว) ----------
-let savepoint = null;   // projects/{key}/meta/savepoint
+// ---------- จุด save (เก็บได้หลายจุด) ----------
+// meta/savepoint = จุดที่ 1 (กริดเสร็จ), meta/savepoint2, savepoint3 … = จุดถัดไป
+// แต่ละจุดเก็บ: กริด + สำเนารายการ (ไม่รวมรูป) ณ เวลานั้น
+const SP_KEYS = ["savepoint", "savepoint2", "savepoint3", "savepoint4", "savepoint5"];
+const savepoints = {};
+function tagSnapshot() {
+  return data.tags.map((t) => { const c = { ...t }; delete c._pending; delete c.serverUpdatedAt; delete c.photos; return c; });
+}
 function showSavepointPanel() {
-  const sp = savepoint;
-  const after = sp ? data.tags.filter((t) => String(t.createdAt || "") > sp.createdAt) : [];
-  openPanel("จุด save", sp ? `
-    <div class="fit">${esc(sp.label || "จุด save")}<br><span class="muted">บันทึกเมื่อ ${esc(new Date(sp.createdAt).toLocaleString("th-TH"))} · ตอนนั้นมีรายการในโมเดล ${sp.tagCount} รายการ</span></div>
-    <p>ถ้าย้อนกลับ ระบบจะ</p>
-    <ul class="muted"><li>คืนค่ากริดอ้างอิงให้เหมือนตอน save</li>
-      <li>${after.length ? `ลบรายการที่เพิ่มหลังจุด save ${after.length} รายการ (ดาวน์โหลดไฟล์สำรองให้ก่อน)` : "ไม่มีรายการที่เพิ่มหลังจุด save"}</li></ul>
-    <div class="form"><label>พิมพ์คำว่า “ย้อนกลับ” เพื่อยืนยัน</label><input id="spWord" autocomplete="off"></div>
-    <div class="actions"><button class="btn danger" id="spGo" disabled>ย้อนกลับไปจุด save</button></div>
-    <div class="auto" id="spMsg"></div>
+  const list = SP_KEYS.filter((k) => savepoints[k]).map((k) => [k, savepoints[k]]);
+  const nextKey = SP_KEYS.find((k) => !savepoints[k]);
+  openPanel("จุด save", `
+    ${list.length ? list.map(([k, sp], i) => {
+      const after = data.tags.filter((t) => String(t.createdAt || "") > sp.createdAt).length;
+      const snapIds = new Set((sp.tags || []).map((t) => t._doc));
+      const missing = (sp.tags || []).filter((t) => !data.tags.some((x) => x._doc === t._doc)).length;
+      return `<div class="fit"><b>จุดที่ ${i + 1}: ${esc(sp.label || k)}</b><br>
+        <span class="muted">บันทึกเมื่อ ${esc(new Date(sp.createdAt).toLocaleString("th-TH"))} · มีรายการ ${sp.tagCount} รายการ</span><br>
+        <span class="muted">ถ้าย้อนกลับ: คืนค่ากริด · ลบรายการที่เพิ่มหลังจากนั้น ${after} รายการ${sp.tags ? ` · สร้างรายการที่หายไปคืน ${missing} รายการ` : ""}</span>
+        <div class="actions"><button class="btn danger" data-sp="${k}">ย้อนกลับไปจุดนี้</button></div></div>`; }).join("") : `<p class="muted">ยังไม่มีจุด save</p>`}
+    <div class="form" id="spConfirm" hidden><label id="spLabel"></label><input id="spWord" autocomplete="off" placeholder="พิมพ์ ย้อนกลับ"><div class="actions"><button class="btn danger" id="spGo" disabled>ยืนยันย้อนกลับ</button></div><div class="auto" id="spMsg"></div></div>
     <hr style="border-color:var(--line)">
-    <div class="actions"><button class="btn" id="spNew">บันทึกจุด save ใหม่แทนที่ (ใช้สถานะตอนนี้)</button></div>`
-    : `<p class="muted">ยังไม่มีจุด save</p><div class="actions"><button class="btn primary" id="spNew">บันทึกจุด save จากสถานะตอนนี้</button></div>`);
+    ${nextKey ? `<div class="form"><label>ชื่อจุด save ใหม่</label><input id="spName" value="ขั้นที่ ${list.length + 1}"></div>
+      <div class="actions"><button class="btn primary" id="spNew">บันทึกจุด save ใหม่จากสถานะตอนนี้</button></div>` : `<p class="muted">ครบ ${SP_KEYS.length} จุดแล้ว</p>`}`);
   panelMode = "savepoint";
-  $id("spNew").onclick = async () => {
-    const sp2 = { label: "กริดวางเสร็จแล้ว", createdAt: new Date().toISOString(), grid: JSON.parse(JSON.stringify(gridMeta)), tagCount: data.tags.length };
-    try { await store.setMeta("savepoint", sp2); savepoint = sp2; toast("บันทึกจุด save แล้ว"); showSavepointPanel(); }
+  $id("spNew") && ($id("spNew").onclick = async () => {
+    const sp2 = { label: $id("spName").value.trim() || nextKey, createdAt: new Date().toISOString(), grid: JSON.parse(JSON.stringify(gridMeta)), tagCount: data.tags.length, tags: tagSnapshot() };
+    try { await store.setMeta(nextKey, sp2); savepoints[nextKey] = sp2; toast("บันทึกจุด save แล้ว"); showSavepointPanel(); }
     catch (e) { toast("บันทึกไม่สำเร็จ: " + (e?.code || e?.message || e), 6000); }
-  };
-  if (!sp) return;
-  $id("spWord").oninput = (e) => { $id("spGo").disabled = e.target.value.trim() !== "ย้อนกลับ"; };
-  $id("spGo").onclick = async () => {
-    $id("spGo").disabled = true;
-    try {
-      if (after.length) {
-        await exportJson(after);
-        let done = 0; const q = after.map((t) => t._doc);
-        const worker = async () => { while (q.length) { const d = q.shift(); try { await store.deleteTag(d); done++; } catch (_) {} $id("spMsg") && ($id("spMsg").textContent = `ลบแล้ว ${done} / ${after.length}`); } };
-        await Promise.all(Array.from({ length: 8 }, worker));
-      }
-      const g = { ...sp.grid, restoredFrom: sp.createdAt };
-      await store.setMeta("grid", g); setGridMeta(g);
-      toast("ย้อนกลับไปจุด save แล้ว", 5000); closePanel();
-    } catch (e) { $id("spMsg").textContent = "ย้อนกลับไม่สำเร็จ: " + (e?.code || e?.message || e); }
-  };
+  });
+  $id("panelBody").querySelectorAll("[data-sp]").forEach((b) => b.onclick = () => {
+    const k = b.dataset.sp, sp = savepoints[k];
+    $id("spConfirm").hidden = false; $id("spLabel").textContent = `ย้อนกลับไป "${sp.label}" — พิมพ์คำว่า “ย้อนกลับ” เพื่อยืนยัน`;
+    $id("spWord").value = ""; $id("spGo").disabled = true;
+    $id("spWord").oninput = (e) => { $id("spGo").disabled = e.target.value.trim() !== "ย้อนกลับ"; };
+    $id("spGo").onclick = () => restoreSavepoint(sp);
+  });
+}
+async function restoreSavepoint(sp) {
+  $id("spGo").disabled = true;
+  const msg = (t) => { if ($id("spMsg")) $id("spMsg").textContent = t; };
+  try {
+    const after = data.tags.filter((t) => String(t.createdAt || "") > sp.createdAt);
+    if (after.length) {
+      await exportJson(after);
+      let done = 0; const q = after.map((t) => t._doc);
+      const worker = async () => { while (q.length) { const d = q.shift(); try { await store.deleteTag(d); done++; } catch (_) {} msg(`ลบแล้ว ${done} / ${after.length}`); } };
+      await Promise.all(Array.from({ length: 8 }, worker));
+    }
+    if (sp.tags) {
+      // คืนรายการตามสำเนา (ตำแหน่ง/ข้อมูล) — รูปถ่ายเดิมยังอยู่ถ้ารายการไม่ถูกลบ
+      let done = 0; const q = sp.tags.slice();
+      const worker = async () => { while (q.length) { const t = q.shift(); const cur = data.tags.find((x) => x._doc === t._doc);
+        if (!cur || cur.updatedAt !== t.updatedAt) { try { await store.saveTag({ ...t, photoCount: cur?.photoCount ?? t.photoCount ?? 0 }, null); } catch (_) {} }
+        done++; msg(`คืนรายการ ${done} / ${sp.tags.length}`); } };
+      await Promise.all(Array.from({ length: 8 }, worker));
+    }
+    const g = { ...sp.grid, restoredFrom: sp.createdAt };
+    await store.setMeta("grid", g); setGridMeta(g);
+    toast(`ย้อนกลับไป "${sp.label}" แล้ว`, 5000); closePanel();
+  } catch (e) { msg("ย้อนกลับไม่สำเร็จ: " + (e?.code || e?.message || e)); }
 }
 
 // ---------- UI wiring ----------
