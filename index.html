@@ -43,6 +43,12 @@
     <button data-act="csv">ดาวน์โหลดตารางสรุป (CSV)</button>
     <button data-act="export">ดาวน์โหลดไฟล์สำรอง (JSON)</button>
     <button data-act="import">นำเข้าจากไฟล์ JSON</button>
+    <div id="menuTools" hidden>
+      <button data-act="grid">ตั้งกริดอ้างอิง</button>
+      <button data-act="report">นำเข้ารายการจากรายงาน</button>
+      <button data-act="del-report">ลบรายการที่นำเข้าจากรายงาน</button>
+      <button data-act="del-all">ลบรายการทั้งหมด</button>
+    </div>
     <div id="menuShare" hidden>
       <button data-act="share-view">คัดลอกลิงก์ดูอย่างเดียว</button>
       <button data-act="share-edit">คัดลอกลิงก์แก้ไข</button>
@@ -66,7 +72,7 @@
   </div>
   <div class="list-top">
     <div class="summary" id="listSummary"></div>
-    <div class="filters"><select id="fType"></select><select id="fSev"></select></div>
+    <div class="filters"><select id="fSurf"></select><select id="fType"></select><select id="fSev"></select></div>
   </div>
   <div id="listItems"></div>
 </aside>

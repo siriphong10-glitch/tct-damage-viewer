@@ -33,6 +33,11 @@ service cloud.firestore {
         && request.resource.data.emails.size() <= 50;
     }
 
+    match /projects/{project}/meta/{name} {
+      allow read: if true;
+      allow write: if isEditor();
+    }
+
     match /projects/{project}/tags/{tagId} {
       allow read: if true;
       allow create, update: if isEditor()

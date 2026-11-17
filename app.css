@@ -34,6 +34,7 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
   border-radius:10px;display:flex;flex-direction:column;min-width:230px;overflow:hidden}
 .menu button{background:none;border:0;color:var(--text);text-align:left;padding:10px 14px;font:inherit;font-size:14px;cursor:pointer}
 .menu button:hover{background:#2a333d}
+#menuTools{display:flex;flex-direction:column;border-top:1px solid var(--line)}
 #menuShare{display:flex;flex-direction:column;border-top:1px solid var(--line)}
 
 #panel{position:absolute;z-index:20;top:52px;right:10px;bottom:10px;width:380px;background:var(--panel);
@@ -132,3 +133,14 @@ body.panel-open{--r:400px}
   #editbar{bottom:10px}
   .kv{grid-template-columns:100px 1fr}
 }
+
+/* กริดอ้างอิง / นำเข้า */
+.grid-label{position:absolute;transform:translate(-50%,-50%);font-size:11px;font-weight:700;color:#58a6ff;background:#0d1117cc;border:1px solid #58a6ff;border-radius:8px;padding:0 5px;pointer-events:none}
+.tag-label.approx .chip{border-style:dashed}
+.warn{color:#ffa198;font-size:13px}
+.fit{font-size:13px;background:#1f6feb22;border:1px solid #1f6feb55;border-radius:8px;padding:8px;margin:8px 0}
+.fit.bad{background:#f8514922;border-color:#f8514955}
+.form label input[type=checkbox]{width:auto;margin-right:6px}
+.filters{flex-wrap:wrap}
+.tag-label.far .chip,.tag-label.far .stem{display:none}
+.tag-label.far .pin{width:7px;height:7px;background:#8b949e}

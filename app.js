@@ -1,4 +1,5 @@
 import * as THREE from "./libs/three/three.module.js";
+import * as G from "./grid.js";
 
 const C = window.APP_CONFIG;
 const params = new URLSearchParams(location.search);
@@ -21,24 +22,27 @@ const KEY_STORE = "dmgtags-editkey";
 addEventListener("hashchange", () => { if (/(?:^|[#&])edit=/.test(location.hash)) location.reload(); });
 const shareUrl = () => { const u = new URL(location.href); u.search = ""; u.hash = ""; return u; };
 
+// ระดับความรุนแรงตามรายงาน (0 = รายงานไม่ระบุ)
 const SEVERITY = [
-  { key: 1, label: "น้อย", color: "#3fb950" },
+  { key: 1, label: "เล็กน้อย", color: "#3fb950" },
   { key: 2, label: "ปานกลาง", color: "#d29922" },
-  { key: 3, label: "มาก", color: "#f0883e" },
-  { key: 4, label: "วิกฤต", color: "#f85149" },
+  { key: 3, label: "เร่งด่วน", color: "#f85149" },
+  { key: 0, label: "ไม่ระบุ", color: "#8b949e" },
 ];
+// ประเภทตามรายงาน (+ อื่น ๆ)
 const DAMAGE_TYPES = [
-  "รอยร้าว",
-  "คอนกรีตกะเทาะ / หลุดร่อน",
-  "เหล็กเสริมเป็นสนิม / โผล่",
-  "การรั่วซึม / คราบน้ำ",
-  "การทรุดตัว / การแอ่นตัว",
-  "ผิวคอนกรีตเสื่อมสภาพ",
-  "การกัดกร่อนของโครงสร้างเหล็ก",
-  "ความเสียหายจากการกระแทก",
+  "เหล็กเสริมเป็นสนิม",
+  "รอยแตกร้าวเนื่องจากอุณหภูมิ",
+  "หลุดร่อนเป็นหลุม",
+  "คานแตกร้าว",
+  "พื้นแตกร้าว",
+  "ผนังแตกร้าว",
+  "ช่องว่างจากงานก่อสร้าง",
+  "คราบหินปูน",
   "อื่น ๆ",
 ];
-const sev = (k) => SEVERITY.find((s) => s.key === Number(k)) || { label: "-", color: "#888" };
+const isCrack = (type) => /แตกร้าว|รอยร้าว/.test(type || "");
+const sev = (k) => SEVERITY.find((s) => s.key === Number(k)) || (Number(k) >= 4 ? SEVERITY[2] : { label: "-", color: "#888" });
 
 // ---------- state ----------
 let data = { version: 1, project: C.projectTitle, tags: [] };
@@ -131,7 +135,7 @@ function applyAuth() {
   $id("modeBadge").hidden = !EDIT;
   if (!draw) $id("editbar").hidden = !EDIT;
   const b = $id("btnLogin");
-  $id("menuShare").hidden = !EDIT;
+  $id("menuShare").hidden = !EDIT; $id("menuTools").hidden = !EDIT;
   if (!store || (!params.has("admin") && !(auth.user && !auth.user.isAnonymous))) { b.hidden = true; $id("menuEditors").hidden = true; renderList(); return; }
   b.hidden = false;
   if (!auth.user || auth.user.isAnonymous) { b.textContent = "เข้าสู่ระบบ"; b.title = "เข้าสู่ระบบเพื่อแก้ไข (เฉพาะผู้ที่ได้รับสิทธิ์)"; }
@@ -182,11 +186,19 @@ async function loadTags() {
   window.dmgStore = store; // สำหรับตรวจสอบระบบ
   store.onAuth((a) => { auth = a; applyAuth(); });
   store.subscribe(onTags, (e) => { console.error(e); setSync("err", "โหลดข้อมูลไม่ได้"); });
+  if (store.subscribeMeta) store.subscribeMeta("grid", (m) => setGridMeta(m));
   applyAuth();
 }
+let pendingTags = null, tagTimer = 0;
 function onTags(tags, meta) {
+  pendingTags = [tags, meta];
+  if (tagTimer) return;
+  tagTimer = setTimeout(() => { tagTimer = 0; const [a, b] = pendingTags; applyTags(a, b); }, firstLoad ? 0 : 250);
+}
+function applyTags(tags, meta) {
   data.tags = tags.filter((t) => t && t.id && Array.isArray(t.position)).sort(byId);
   rebuildAll();
+  if (gridShown) drawGrid();
   if (store) {
     if (meta.pending) setSync("busy", "กำลังบันทึก…");
     else if (meta.fromCache && !navigator.onLine) setSync("off", "ออฟไลน์ — จะบันทึกขึ้นออนไลน์เมื่อมีสัญญาณ");
@@ -251,7 +263,10 @@ function buildOverlay(t) {
   const g = new THREE.Group();
   const loc = t.points.map(toLocal);
   const lineGeo = new THREE.BufferGeometry().setFromPoints([...loc, loc[0]]);
-  const line = new THREE.Line(lineGeo, occludable(new THREE.LineBasicMaterial({ color, transparent: true })));
+  const line = t.rangeBox
+    ? new THREE.Line(lineGeo, occludable(new THREE.LineDashedMaterial({ color, transparent: true, dashSize: 1.2, gapSize: 0.8 })))
+    : new THREE.Line(lineGeo, occludable(new THREE.LineBasicMaterial({ color, transparent: true })));
+  if (t.rangeBox) line.computeLineDistances();
   line.renderOrder = 10;
   g.add(line);
   const mtr = polygonMetrics(t.points.map((p) => new THREE.Vector3(...p)));
@@ -263,7 +278,7 @@ function buildOverlay(t) {
     for (const tri of tris) for (const i of tri) pos.push(loc[i].x, loc[i].y, loc[i].z);
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-    const mesh = new THREE.Mesh(geo, occludable(new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.28, side: THREE.DoubleSide, depthWrite: false })));
+    const mesh = new THREE.Mesh(geo, occludable(new THREE.MeshBasicMaterial({ color, transparent: true, opacity: t.rangeBox ? 0.12 : 0.28, side: THREE.DoubleSide, depthWrite: false })));
     mesh.renderOrder = 9;
     g.add(mesh);
   }
@@ -274,10 +289,14 @@ function removeOverlay(id) {
   const g = overlays.get(id);
   if (g) { overlayGroup.remove(g); g.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); }); overlays.delete(id); }
 }
+function shownOnModel(t) {
+  const ft = $id("fType").value, fs = $id("fSev").value, fsf = $id("fSurf").value;
+  return (!ft || t.type === ft) && (fs === "" || Number(t.severity ?? 0) === +fs) && (!fsf || (t.surface || "manual") === fsf);
+}
 function rebuildAll() {
   refreshOcclusion();
   for (const id of [...overlays.keys()]) removeOverlay(id);
-  data.tags.forEach(buildOverlay);
+  data.tags.filter(shownOnModel).forEach(buildOverlay);
   renderLabels(true);
   $id("tagCount").textContent = data.tags.length;
   renderList();
@@ -290,8 +309,10 @@ function renderLabels(rebuild = false) {
   if (rebuild) {
     host.innerHTML = ""; labelEls.clear();
     for (const t of data.tags) {
+      if (!shownOnModel(t)) continue;
       const el = document.createElement("div");
       el.className = "tag-label";
+      if (t.approx) el.classList.add("approx");
       el.innerHTML = `<span class="chip" style="background:${sev(t.severity).color}">${esc(t.id)}</span><span class="stem"></span><span class="pin"></span>`;
       el.addEventListener("click", (ev) => { ev.stopPropagation(); showDetail(t.id); });
       host.appendChild(el); labelEls.set(t.id, el);
@@ -340,7 +361,7 @@ function updateOcclusion(cam, w, h) {
   if (key !== lastCamKey) { lastCamKey = key; camStillSince = now; occQueue = []; return; }
   // ตรวจเมื่อกล้องหยุดนิ่ง แล้วตรวจซ้ำอีกครั้งหลังโมเดลโหลดรายละเอียดเพิ่ม
   const stage = now - camStillSince > 1500 ? "2" : now - camStillSince > 120 ? "1" : "";
-  if (stage && occDoneFor !== key + stage && !occQueue.length) { occDoneFor = key + stage; occQueue = data.tags.map((t) => t.id); }
+  if (stage && occDoneFor !== key + stage && !occQueue.length) { occDoneFor = key + stage; occQueue = data.tags.filter((t) => labelEls.has(t.id)).map((t) => t.id); }
   for (let i = 0; i < 4 && occQueue.length; i++) {
     const t = data.tags.find((x) => x.id === occQueue.shift());
     if (t) occluded.set(t.id, testOcclusion(t, cam, w, h));
@@ -361,7 +382,10 @@ function tick() {
       el.style.left = p.x + "px"; el.style.top = p.y + "px";
       el.classList.toggle("active", t.id === activeId);
       el.classList.toggle("occluded", !!occluded.get(t.id) && t.id !== activeId);
+      // หมุดตำแหน่งโดยประมาณ (ใต้ท่า) ที่อยู่ไกล แสดงเป็นจุดเล็ก เพื่อไม่ให้ป้ายรก
+      if (t.approx && t.kind === "pin") el.classList.toggle("far", cam.position.distanceTo(_v.set(...t.position)) > 30 && t.id !== activeId);
     }
+    for (const g of gridLabelEls) { const p = project(g.p, cam, w, h); g.el.style.display = p.vis ? "" : "none"; g.el.style.left = p.x + "px"; g.el.style.top = p.y + "px"; }
     if (draw) draw.points.forEach((pt, i) => {
       const el = draw.vertexEls[i]; const p = project([pt.x, pt.y, pt.z], cam, w, h);
       el.style.display = p.vis ? "" : "none"; el.style.left = p.x + "px"; el.style.top = p.y + "px";
@@ -406,11 +430,12 @@ function startDraw(kind) {
   cancelDraw();
   draw = { kind, points: [], vertexEls: [], line: null };
   $id("editbar").hidden = true; $id("drawbar").hidden = false;
-  $id("btnUndoPt").hidden = kind === "pin";
-  $id("btnFinish").hidden = kind === "pin";
-  $id("drawHint").textContent = kind === "pin" ? "แตะตำแหน่งความเสียหายบนโมเดล" : "แตะมุมของพื้นที่ทีละจุด (อย่างน้อย 3 จุด) แล้วกด เสร็จ";
+  $id("btnUndoPt").hidden = kind !== "area";
+  $id("btnFinish").hidden = kind !== "area";
+  $id("drawHint").textContent = kind === "pin" ? "แตะตำแหน่งความเสียหายบนโมเดล" : kind === "gridpt" ? "แตะจุดตัดกริดบนโมเดล (เช่น มุมเสา/รอยต่อแผ่นพื้น)" : "แตะมุมของพื้นที่ทีละจุด (อย่างน้อย 3 จุด) แล้วกด เสร็จ";
 }
 function addDrawPoint(p) {
+  if (draw.kind === "gridpt") { const cb = draw.onPick; cancelDraw(); cb([p.x, p.y, p.z]); return; }
   if (draw.kind === "pin") {
     const pos = [p.x, p.y, p.z];
     finishDraw({ position: pos });
@@ -487,7 +512,11 @@ function showDetail(id) {
     ["ระดับความรุนแรง", `<span class="sev-pill" style="background:${s.color}">${s.label}</span>`],
     ["ตำแหน่ง / องค์อาคาร", esc(t.element || "-")],
   ];
-  if (t.kind === "area") {
+  if (t.reportArea != null) rows.push(["พื้นที่ตามรายงาน", `${fmt(t.reportArea)} ตร.ม.`]);
+  if (t.gridText) rows.push(["ตำแหน่งตามรายงาน", `${t.surface === "under" ? "ใต้ท่า" : "ผิวบนท่า"} · Zone ${esc(t.zone || "-")} · Grid ${esc(t.gridText)}<br><span class="muted">${esc(t.locText || "")}</span>`]);
+  if (t.approx) rows.push(["ความแม่นตำแหน่ง", "โดยประมาณ — รายงานระบุได้ถึงระดับช่องกริด จุดในโมเดลไม่ใช่ตำแหน่งจริงของแผล"]);
+  if (t.rangeBox) rows.push(["กรอบที่แสดง", `ขอบเขตช่วงกริดที่รายงานระบุ (${fmt(t.area)} ตร.ม.) ความเสียหายกระจายอยู่ภายในกรอบ ไม่ได้เต็มกรอบ`]);
+  if (t.kind === "area" && !t.rangeBox) {
     rows.push(["พื้นที่ (วัดจากโมเดล)", `${fmt(t.area)} ตร.ม.`]);
     rows.push(["ขนาดโดยประมาณ", `${fmt(t.length)} × ${fmt(t.width)} ม.`]);
     rows.push(["เส้นรอบรูป", `${fmt(t.perimeter)} ม.`]);
@@ -500,6 +529,7 @@ function showDetail(id) {
   rows.push(["วันที่ตรวจ", esc(t.date || "-")]);
   rows.push(["ผู้ตรวจ", esc(t.inspector || "-")]);
   rows.push(["พิกัด (UTM 47N)", `E ${fmt(t.position[0], 3)}<br>N ${fmt(t.position[1], 3)}<br>Z ${fmt(t.position[2], 3)}`]);
+  if (t.reportPage) rows.push(["อ้างอิง", `รายงาน CPAC หน้า ${esc(t.reportPage)}${t.repairStatus && t.repairStatus !== "-" ? " · สถานะ: " + esc(t.repairStatus) : ""}`]);
   if (t.updatedBy) rows.push(["แก้ไขล่าสุดโดย", esc(t.updatedBy) + (t.updatedAt ? `<br><span class="muted">${esc(new Date(t.updatedAt).toLocaleString("th-TH"))}</span>` : "")]);
   const nPhotos = t.photoCount ?? (t.photos || []).length;
   const photos = nPhotos ? `<div class="photos" id="dPhotos"><span class="muted">กำลังโหลดรูป ${nPhotos} รูป…</span></div>` : "";
@@ -556,8 +586,8 @@ function showForm(id, draftTag) {
   activeId = t.id; activeDoc = t._doc || null;
   let photosChanged = isNew, photosReady = isNew;
   if (!isNew) t.photos = [];
-  const opt = (arr, val) => arr.map((a) => `<option ${a === val ? "selected" : ""}>${esc(a)}</option>`).join("");
-  const sevOpt = SEVERITY.map((s) => `<option value="${s.key}" ${Number(t.severity) === s.key ? "selected" : ""}>${s.key} — ${s.label}</option>`).join("");
+  const opt = (arr, val) => (val && !arr.includes(val) ? [val, ...arr] : arr).map((a) => `<option ${a === val ? "selected" : ""}>${esc(a)}</option>`).join("");
+  const sevOpt = SEVERITY.map((s) => `<option value="${s.key}" ${t.severity !== undefined && t.severity !== "" && Number(t.severity) === s.key ? "selected" : ""}>${s.label}</option>`).join("");
   const areaInfo = t.kind === "area"
     ? `<label>พื้นที่ (คำนวณจากโมเดล)</label><input value="${fmt(t.area)} ตร.ม. · ${fmt(t.length)} × ${fmt(t.width)} ม." disabled>
        <div class="auto">คำนวณบนระนาบของพื้นที่ที่วาด (${tiltText(t.tilt)}) จึงใช้ได้ทั้งพื้น ผนัง และผิวเอียง</div>` : "";
@@ -578,7 +608,7 @@ function showForm(id, draftTag) {
       <input name="dimW" inputmode="decimal" value="${esc(t.dimW)}" placeholder="กว้าง (ม.)">
       <input name="dimD" inputmode="decimal" value="${esc(t.dimD)}" placeholder="ลึก (มม.)">
     </div>
-    <div id="crackRow" ${t.type === "รอยร้าว" ? "" : "hidden"}>
+    <div id="crackRow" ${isCrack(t.type) ? "" : "hidden"}>
       <label>ความกว้างรอยร้าว (มม.)</label>
       <input name="crackWidth" inputmode="decimal" value="${esc(t.crackWidth)}" placeholder="เช่น 0.3">
     </div>
@@ -601,7 +631,7 @@ function showForm(id, draftTag) {
   openPanel(isNew ? `เพิ่ม ${t.id}` : `แก้ไข ${t.id}`, html);
   panelMode = "form";
   const form = $id("tagForm");
-  form.type.onchange = () => ($id("crackRow").hidden = form.type.value !== "รอยร้าว");
+  form.type.onchange = () => ($id("crackRow").hidden = !isCrack(form.type.value));
   const renderPhotos = () => {
     $id("photoList").innerHTML = t.photos.map((p, i) => `<div class="photo-wrap"><img src="${p}"><button type="button" class="btn rm" data-i="${i}">✕</button></div>`).join("");
     $id("photoList").querySelectorAll(".rm").forEach((b) => b.onclick = () => { t.photos.splice(+b.dataset.i, 1); photosChanged = true; renderPhotos(); });
@@ -630,7 +660,7 @@ function showForm(id, draftTag) {
       : "";
     if (idErr) { const m = $id("idMsg"); m.textContent = idErr; m.style.color = "#f85149"; form.tagId.focus(); return; }
     t.id = newId;
-    if (t.type !== "รอยร้าว") delete t.crackWidth;
+    if (!isCrack(t.type)) delete t.crackWidth;
     t.updatedAt = new Date().toISOString();
     if (isNew) { t.createdAt = t.updatedAt; t._doc = store.newId(); }
     try { localStorage.setItem("dmgtags-inspector", t.inspector); } catch (_) {}
@@ -681,8 +711,7 @@ function renderList() {
   const counts = SEVERITY.map((s) => `${s.label} ${data.tags.filter((t) => t.severity === s.key).length}`).join(" · ");
   const totalArea = data.tags.filter((t) => t.kind === "area").reduce((a, t) => a + (t.area || 0), 0);
   $id("listSummary").innerHTML = `ทั้งหมด ${data.tags.length} รายการ · ${counts}<br>พื้นที่ความเสียหายรวม ${fmt(totalArea)} ตร.ม.`;
-  const ft = $id("fType").value, fs = $id("fSev").value;
-  const items = [...data.tags].sort(byId).filter((t) => (!ft || t.type === ft) && (!fs || t.severity === +fs));
+  const items = [...data.tags].sort(byId).filter(shownOnModel);
   $id("listItems").innerHTML = items.length ? items.map((t) => `<div class="list-item${t.id === activeId ? " sel" : ""}" data-id="${esc(t.id)}">
       <span class="dot" style="background:${sev(t.severity).color};margin-top:4px"></span>
       <div><b>${esc(t.id)}</b> ${esc(t.type)}<div class="meta">${esc(t.element || "")}${t.kind === "area" ? ` · ${fmt(t.area)} ตร.ม.` : ""}${t.photoCount ? ` · รูป ${t.photoCount}` : ""}</div></div>
@@ -694,7 +723,8 @@ function renderList() {
 }
 $id("fType").innerHTML = `<option value="">ทุกประเภท</option>${DAMAGE_TYPES.map((d) => `<option>${esc(d)}</option>`).join("")}`;
 $id("fSev").innerHTML = `<option value="">ทุกระดับ</option>${SEVERITY.map((s) => `<option value="${s.key}">${s.label}</option>`).join("")}`;
-$id("fType").onchange = renderList; $id("fSev").onchange = renderList;
+$id("fSurf").innerHTML = `<option value="">ทุกตำแหน่ง</option><option value="top">ผิวบนท่า</option><option value="under">ใต้ท่า</option><option value="manual">ปักเอง</option>`;
+$id("fType").onchange = $id("fSev").onchange = $id("fSurf").onchange = () => { rebuildAll(); };
 $id("btnCloseList").onclick = () => setListOpen(false);
 
 // ---------- files ----------
@@ -703,10 +733,10 @@ function download(name, text, type) {
   a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name;
   document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
-async function exportJson() {
+async function exportJson(subset) {
   toast("กำลังรวบรวมข้อมูลและรูป…", 8000);
   const tags = [];
-  for (const t of data.tags) {
+  for (const t of (subset || data.tags)) {
     const c = { ...t }; delete c._doc; delete c._pending; delete c.serverUpdatedAt;
     try { c.photos = await getPhotos(t); } catch (_) { c.photos = []; }
     tags.push(c);
@@ -782,6 +812,215 @@ document.addEventListener("click", (e) => { if (!$id("userMenu").contains(e.targ
 addEventListener("online", () => setSync("busy", "กำลังซิงก์…"));
 addEventListener("offline", () => setSync("off", "ออฟไลน์ — จะบันทึกขึ้นออนไลน์เมื่อมีสัญญาณ"));
 
+// ---------- กริดอ้างอิง (เทียบกริดของรายงานกับพิกัดโมเดล) ----------
+let gridMeta = { points: [] };   // {points:[{L,N,x,y,z}]}
+let gridModel = null;
+let gridShown = false;
+let gridGroup = null;
+const gridLabelEls = [];
+function setGridMeta(m) {
+  gridMeta = m && Array.isArray(m.points) ? m : { points: [] };
+  const f = gridMeta.points.length >= 3 ? G.fitGrid(gridMeta.points) : null;
+  gridModel = f && !f.error ? f : null;
+  if (gridShown) drawGrid();
+  if (panelMode === "grid") showGridPanel();
+}
+function clearGrid() {
+  if (gridGroup) { overlayGroup.remove(gridGroup); gridGroup.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); }); gridGroup = null; }
+  gridLabelEls.splice(0).forEach((e) => e.el.remove());
+}
+// เส้นกริด: Zone 1 (A–N) มีแนว 1–3, ส่วน N–AP มีแนว 1–15
+function drawGrid() {
+  clearGrid();
+  if (!gridModel || !overlayGroup) return;
+  gridGroup = new THREE.Group();
+  const mat = occludable(new THREE.LineBasicMaterial({ color: 0x58a6ff, transparent: true, opacity: 0.9 }));
+  const seg = (a, b) => {
+    const g = new THREE.BufferGeometry().setFromPoints([toLocal(a), toLocal(b)]);
+    const l = new THREE.Line(g, mat); l.renderOrder = 8; gridGroup.add(l);
+  };
+  const lift = (w) => [w[0], w[1], w[2] + 0.05];
+  const iN = G.LETTERS.indexOf("N");
+  G.LETTERS.forEach((L, i) => {
+    const nMax = i < iN ? "3" : "15";
+    seg(lift(G.gridWorld(gridModel, L, "1")), lift(G.gridWorld(gridModel, L, nMax)));
+    addGridLabel(L, G.gridWorld(gridModel, L, "1"), -1.5, 0);
+  });
+  G.NUMBERS.forEach((N) => {
+    const k = Number(N);
+    seg(lift(G.gridWorld(gridModel, k <= 3 ? "A" : "N", N)), lift(G.gridWorld(gridModel, "AP", N)));
+    addGridLabel(N, G.gridWorld(gridModel, "AP", N), 0, 1.5);
+  });
+  overlayGroup.add(gridGroup);
+}
+function addGridLabel(text, w, dv, du) {
+  // เลื่อนป้ายออกจากปลายเส้นเล็กน้อยตามทิศของกริด
+  const u = G.letterDist(G.LETTERS[0]);
+  const p = [w[0] + du * gridModel.cx[1] / gridModel.scaleU + dv * gridModel.cx[2] / gridModel.scaleV,
+             w[1] + du * gridModel.cy[1] / gridModel.scaleU + dv * gridModel.cy[2] / gridModel.scaleV, w[2]];
+  const el = document.createElement("div"); el.className = "grid-label"; el.textContent = text;
+  $id("labels").appendChild(el); gridLabelEls.push({ el, p });
+}
+function showGridPanel() {
+  const pts = gridMeta.points;
+  const fit = pts.length >= 3 ? G.fitGrid(pts) : null;
+  const res = fit && !fit.error ? new Map(fit.residuals.map((r) => [r.label, r])) : new Map();
+  const quality = !fit ? `<p class="muted">ต้องมีจุดอ้างอิงอย่างน้อย 3 จุด กระจายทั้งแนวตัวอักษรและแนวตัวเลข แนะนำ A/1, AP/1, AP/15 และเพิ่มจุดที่ 4–5 ไว้ตรวจ</p>`
+    : fit.error ? `<p class="warn">${esc(fit.error)}</p>`
+    : `<div class="fit ${fit.rms > 0.5 ? "bad" : ""}">ความคลาดเคลื่อนเฉลี่ย ${fmt(fit.rms)} ม. · สเกลแนวตัวอักษร ${fmt(fit.scaleU * 100, 1)}% · แนวตัวเลข ${fmt(fit.scaleV * 100, 1)}% ของแบบ · มุมเบี้ยว ${fmt(fit.skewDeg, 1)}°</div>
+       <p class="muted">${pts.length === 3 ? "3 จุดพอดีเป๊ะเสมอ ให้เพิ่มจุดที่ 4 เพื่อตรวจความถูกต้อง" : fit.rms > 0.5 ? "คลาดเกิน 0.5 ม. — ตรวจว่าใส่ชื่อกริดถูกหรือแตะตรงจุดตัดจริง" : "ใช้ได้ — กด 'แสดงเส้นกริด' แล้วดูว่าเส้นทับรอยต่อแผ่นพื้นและแนวคานหรือไม่"}</p>`;
+  openPanel("กริดอ้างอิง", `
+    <p class="muted">แตะจุดตัดกริดบนโมเดลที่รู้แน่ว่าเป็นกริดไหน แล้วใส่ชื่อกริด ระบบจะคำนวณกริดทั้งผืนให้ (ระยะตามแบบ: A–N 4.00 ม., N–AP 3.50 ม., แนวตัวเลข 3.50 ม.)</p>
+    <div class="grid-pts">${pts.map((p, i) => { const r = res.get(p.L + "/" + p.N);
+      return `<div class="editor-row"><span><b>${esc(p.L)}/${esc(p.N)}</b> <span class="muted">${r ? "คลาด " + fmt(r.dxy) + " ม." : ""}</span></span><button class="btn" data-i="${i}">ลบ</button></div>`; }).join("") || `<p class="muted">ยังไม่มีจุดอ้างอิง</p>`}</div>
+    ${quality}
+    <div class="actions">
+      <button class="btn primary" id="gAdd">＋ เพิ่มจุดอ้างอิง</button>
+      <button class="btn" id="gShow" ${gridModel ? "" : "disabled"}>${gridShown ? "ซ่อนเส้นกริด" : "แสดงเส้นกริด"}</button>
+    </div>`);
+  panelMode = "grid";
+  $id("panelBody").querySelectorAll(".grid-pts button").forEach((b) => b.onclick = async () => {
+    const pts2 = gridMeta.points.filter((_, i) => i !== +b.dataset.i);
+    await saveGrid(pts2);
+  });
+  $id("gShow").onclick = () => { gridShown = !gridShown; if (gridShown) drawGrid(); else clearGrid(); showGridPanel(); };
+  $id("gAdd").onclick = () => {
+    startDraw("gridpt");
+    draw.onPick = (xyz) => askGridLabel(xyz);
+  };
+}
+function askGridLabel(xyz) {
+  openPanel("ชื่อกริดของจุดนี้", `<form class="form" id="gForm">
+      <label>จุดตัดกริด (แนวตัวอักษร / แนวตัวเลข)</label>
+      <input name="g" placeholder="เช่น A/1 หรือ AP/15" autofocus>
+      <div class="auto" id="gMsg">E ${fmt(xyz[0], 2)} · N ${fmt(xyz[1], 2)} · Z ${fmt(xyz[2], 2)}</div>
+      <div class="actions"><button class="btn primary" type="submit">บันทึกจุด</button><button class="btn" type="button" id="gCancel">ยกเลิก</button></div></form>`);
+  panelMode = "gridask";
+  $id("gCancel").onclick = showGridPanel;
+  $id("gForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const g = G.parseGridPoint(e.target.g.value);
+    if (!g) { $id("gMsg").textContent = "รูปแบบไม่ถูกต้อง — ใช้ เช่น A/1, N/3, AP/15 (ตัวอักษร A–AP, ตัวเลข 1–15)"; return; }
+    const pts = gridMeta.points.filter((p) => !(p.L === g.L && p.N === g.N));
+    pts.push({ ...g, x: r3(xyz[0]), y: r3(xyz[1]), z: r3(xyz[2]) });
+    await saveGrid(pts);
+  };
+}
+async function saveGrid(points) {
+  try { await store.setMeta("grid", { points }); setGridMeta({ points }); showGridPanel(); }
+  catch (e) { toast("บันทึกจุดอ้างอิงไม่สำเร็จ: " + (e?.code || e?.message || e), 6000); }
+}
+
+// ---------- นำเข้ารายการจากรายงาน ----------
+const REPORT_SOURCE = "report-cpac-20261106";
+const UNDER_DEPTH = 0.6;   // วางหมุดใต้ท่าต่ำกว่าผิวพื้นโดยประมาณ (ม.)
+const SEV_MAP = { "เล็กน้อย": 1, "ปานกลาง": 2, "เร่งด่วน": 3 };
+let reportItems = null;
+async function loadReportItems() {
+  if (!reportItems) reportItems = (await (await fetch("report-tags.json", { cache: "no-cache" })).json()).items;
+  return reportItems;
+}
+function buildReportTag(it, model) {
+  const isUnder = it.surface === "under";
+  const loc = G.locate(model, it.gridLetter, it.gridNum);
+  if (!loc) return null;
+  const down = isUnder ? UNDER_DEPTH : 0;
+  const t = {
+    id: it.id, source: REPORT_SOURCE, surface: it.surface, zone: it.zone, gridText: it.gridText, locText: it.locText,
+    type: it.damage, severity: SEV_MAP[it.severity] ?? 0, element: `${isUnder ? "ใต้ท่า" : "ผิวบนท่า"} Zone ${it.zone} · ${it.element}`,
+    description: `ตามรายงาน: ${it.element}${it.damage ? " — " + it.damage : ""}`, note: it.reviewNote || "",
+    reportArea: it.area, reportPage: it.page, repairStatus: it.status, approx: isUnder || !!loc.isRect,
+    inspector: "CPAC (รายงาน 6 พ.ย. 2569)", date: "2026-11-06",
+  };
+  let center = loc.center.slice(); center[2] -= down;
+  if (it.shape.startsWith("พื้นที่") && loc.isRect) {
+    // กรอบตามช่วงกริด (ใต้ท่า: หดเข้า 0.3 ม. เพื่อไม่ทับคาน)
+    const inset = isUnder ? 0.3 : 0;
+    const uu = [loc.u0 + inset, loc.u1 - inset], vv = [loc.v0 + inset, loc.v1 - inset];
+    const pts = [[uu[0], vv[0]], [uu[1], vv[0]], [uu[1], vv[1]], [uu[0], vv[1]]].map(([u, v]) => { const w = G.toWorld(model, u, v); w[2] -= down; return w.map(r3); });
+    const m = polygonMetrics(pts.map((p) => new THREE.Vector3(...p)));
+    Object.assign(t, { kind: "area", points: pts, area: r3(m.area), perimeter: r3(m.perimeter), length: r3(m.length), width: r3(m.width), tilt: Math.round(m.tilt), rangeBox: !isUnder });
+  } else {
+    t.kind = "pin";
+  }
+  t.position = center.map(r3);
+  t.camera = { position: [center[0], center[1] - 14, center[2] + (isUnder ? -6 : 16)].map(r3) };
+  return t;
+}
+// ใต้ท่า: หลายรายการในช่องเดียวกัน → เรียงหมุดเป็นตารางในช่อง (ไม่ใช่ตำแหน่งจริง)
+function spreadInCells(tags, model) {
+  const groups = new Map();
+  for (const t of tags) if (t.surface === "under" && t.kind === "pin") {
+    const k = t.gridText; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(t);
+  }
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    const n = list.length, cols = Math.ceil(Math.sqrt(n)), rows = Math.ceil(n / cols);
+    const step = 0.9; // ม.
+    const eu = [model.cx[1] / model.scaleU, model.cy[1] / model.scaleU], ev = [model.cx[2] / model.scaleV, model.cy[2] / model.scaleV];
+    list.forEach((t, i) => {
+      const du = ((i % cols) - (cols - 1) / 2) * step, dv = (Math.floor(i / cols) - (rows - 1) / 2) * step;
+      t.position = [r3(t.position[0] + du * eu[0] + dv * ev[0]), r3(t.position[1] + du * eu[1] + dv * ev[1]), t.position[2]];
+    });
+  }
+}
+async function showReportImport() {
+  const items = await loadReportItems();
+  const has = new Set(data.tags.map((t) => t.id));
+  const cnt = (f) => items.filter(f).length;
+  const nTop = cnt((i) => i.surface === "top"), nUnder = cnt((i) => i.surface === "under");
+  const nRepaired = cnt((i) => i.status === "ซ่อมแล้ว"), nAmb = cnt((i) => i.ambiguous), nExist = cnt((i) => has.has(i.id));
+  openPanel("นำเข้ารายการจากรายงาน", `
+    ${gridModel ? "" : `<p class="warn">ยังไม่ได้ตั้งกริดอ้างอิง — ต้องตั้งก่อน (เมนู ไฟล์ → ตั้งกริดอ้างอิง)</p>`}
+    <div class="form">
+      <label><input type="checkbox" id="riTop" checked> ผิวบนท่า ${nTop} รายการ (T-1 ถึง T-27)</label>
+      <label><input type="checkbox" id="riUnder"> ใต้ท่า ${nUnder} รายการ (U-…) — ตำแหน่งโดยประมาณระดับช่องกริด</label>
+      <label><input type="checkbox" id="riRep"> รวมรายการที่รายงานระบุว่า "ซ่อมแล้ว" (${nRepaired})</label>
+    </div>
+    <p class="muted">ข้ามรายการที่ตำแหน่งกำกวม ${nAmb} รายการ (U-N19 ถึง U-N25) และรายการที่มีรหัสนี้ในโมเดลแล้ว ${nExist} รายการ ทุกรายการที่นำเข้าจะติดป้ายแหล่งที่มา ลบออกทีเดียวได้จากเมนู "ลบรายการที่นำเข้าจากรายงาน"</p>
+    <div class="actions"><button class="btn primary" id="riGo" ${gridModel ? "" : "disabled"}>นำเข้า</button></div>
+    <div class="auto" id="riMsg"></div>`);
+  panelMode = "report";
+  $id("riGo").onclick = async () => {
+    const want = items.filter((i) => ((i.surface === "top" && $id("riTop").checked) || (i.surface === "under" && $id("riUnder").checked))
+      && (i.status !== "ซ่อมแล้ว" || $id("riRep").checked) && !i.ambiguous && !has.has(i.id));
+    const tags = want.map((i) => buildReportTag(i, gridModel)).filter(Boolean);
+    spreadInCells(tags, gridModel);
+    if (!tags.length) { $id("riMsg").textContent = "ไม่มีรายการให้นำเข้า"; return; }
+    $id("riGo").disabled = true;
+    let done = 0, fail = 0;
+    const now = new Date().toISOString();
+    const queue = tags.map((t) => ({ ...t, _doc: store.newId(), createdAt: now, updatedAt: now, photoCount: 0 }));
+    const worker = async () => { while (queue.length) { const t = queue.shift(); try { await store.saveTag(t, null); done++; } catch (e) { fail++; if (e?.code === "permission-denied") { queue.length = 0; } } $id("riMsg") && ($id("riMsg").textContent = `บันทึกแล้ว ${done} / ${tags.length}${fail ? ` · ไม่สำเร็จ ${fail}` : ""}`); } };
+    await Promise.all(Array.from({ length: 8 }, worker));
+    toast(`นำเข้า ${done} รายการ${fail ? ` (ไม่สำเร็จ ${fail})` : ""}`, 5000);
+    $id("fSurf").value = ""; setListOpen(true);
+  };
+}
+
+// ---------- ลบข้อมูล (แผนสำรอง) ----------
+function showDeletePanel(scope) {
+  const targets = scope === "report" ? data.tags.filter((t) => t.source === REPORT_SOURCE) : [...data.tags];
+  const word = "ลบ";
+  openPanel(scope === "report" ? "ลบรายการที่นำเข้าจากรายงาน" : "ลบรายการทั้งหมด", `
+    <p>จะลบ <b>${targets.length}</b> รายการ${scope === "report" ? " ที่นำเข้าจากรายงาน (รายการที่ปักเองไม่ถูกลบ)" : " ทั้งหมดในโมเดล รวมรูปถ่าย"}</p>
+    <p class="warn">ลบแล้วกู้คืนในแอปไม่ได้ ระบบจะดาวน์โหลดไฟล์สำรอง (JSON) ให้ก่อนลบ ซึ่งนำกลับมาได้ด้วยเมนู "นำเข้าจากไฟล์ JSON"</p>
+    <div class="form"><label>พิมพ์คำว่า “${word}” เพื่อยืนยัน</label><input id="delWord" autocomplete="off"></div>
+    <div class="actions"><button class="btn danger" id="delGo" disabled>ดาวน์โหลดไฟล์สำรองแล้วลบ ${targets.length} รายการ</button></div>
+    <div class="auto" id="delMsg"></div>`);
+  panelMode = "delete";
+  $id("delWord").oninput = (e) => { $id("delGo").disabled = e.target.value.trim() !== word || !targets.length; };
+  $id("delGo").onclick = async () => {
+    $id("delGo").disabled = true;
+    await exportJson(targets);
+    let done = 0, fail = 0;
+    const queue = targets.map((t) => t._doc);
+    const worker = async () => { while (queue.length) { const d = queue.shift(); try { await store.deleteTag(d); done++; } catch (_) { fail++; } $id("delMsg") && ($id("delMsg").textContent = `ลบแล้ว ${done} / ${targets.length}${fail ? ` · ไม่สำเร็จ ${fail}` : ""}`); } };
+    await Promise.all(Array.from({ length: 8 }, worker));
+    toast(`ลบ ${done} รายการแล้ว${fail ? ` (ไม่สำเร็จ ${fail})` : ""}`, 5000);
+  };
+}
+
 // ---------- UI wiring ----------
 function hideMenus() { $id("moreMenu").hidden = true; $id("legend").hidden = true; }
 $id("btnList").onclick = () => { hideMenus(); setListOpen(!listOpen); };
@@ -800,6 +1039,10 @@ $id("moreMenu").onclick = (e) => {
   if (act === "import") $id("importFile").click();
   if (act === "csv") exportCsv();
   if (act === "editors") showEditors();
+  if (act === "grid") showGridPanel();
+  if (act === "report") showReportImport();
+  if (act === "del-report") showDeletePanel("report");
+  if (act === "del-all") showDeletePanel("all");
   if (act === "share-view") copyText(shareUrl().toString(), "คัดลอกลิงก์ดูอย่างเดียวแล้ว");
   if (act === "share-edit") { const u = shareUrl(); u.hash = "edit=" + C.editKey; copyText(u.toString(), "คัดลอกลิงก์แก้ไขแล้ว — ส่งให้เฉพาะคนที่ให้แก้ไขได้"); }
 };
