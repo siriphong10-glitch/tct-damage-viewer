@@ -1035,17 +1035,18 @@ const savepoints = {};
 function tagSnapshot() {
   return data.tags.map((t) => { const c = { ...t }; delete c._pending; delete c.serverUpdatedAt; delete c.photos; return c; });
 }
+function snapTags(sp) { if (sp.tagsJson) { try { return JSON.parse(sp.tagsJson); } catch (_) { return []; } } return sp.tags || []; }
 function showSavepointPanel() {
   const list = SP_KEYS.filter((k) => savepoints[k]).map((k) => [k, savepoints[k]]);
   const nextKey = SP_KEYS.find((k) => !savepoints[k]);
   openPanel("จุด save", `
     ${list.length ? list.map(([k, sp], i) => {
       const after = data.tags.filter((t) => String(t.createdAt || "") > sp.createdAt).length;
-      const snapIds = new Set((sp.tags || []).map((t) => t._doc));
-      const missing = (sp.tags || []).filter((t) => !data.tags.some((x) => x._doc === t._doc)).length;
+      const spTags = snapTags(sp);
+      const missing = spTags.filter((t) => !data.tags.some((x) => x._doc === t._doc)).length;
       return `<div class="fit"><b>จุดที่ ${i + 1}: ${esc(sp.label || k)}</b><br>
         <span class="muted">บันทึกเมื่อ ${esc(new Date(sp.createdAt).toLocaleString("th-TH"))} · มีรายการ ${sp.tagCount} รายการ</span><br>
-        <span class="muted">ถ้าย้อนกลับ: คืนค่ากริด · ลบรายการที่เพิ่มหลังจากนั้น ${after} รายการ${sp.tags ? ` · สร้างรายการที่หายไปคืน ${missing} รายการ` : ""}</span>
+        <span class="muted">ถ้าย้อนกลับ: คืนค่ากริด · ลบรายการที่เพิ่มหลังจากนั้น ${after} รายการ${spTags.length ? ` · สร้างรายการที่หายไปคืน ${missing} รายการ` : ""}</span>
         <div class="actions"><button class="btn danger" data-sp="${k}">ย้อนกลับไปจุดนี้</button></div></div>`; }).join("") : `<p class="muted">ยังไม่มีจุด save</p>`}
     <div class="form" id="spConfirm" hidden><label id="spLabel"></label><input id="spWord" autocomplete="off" placeholder="พิมพ์ ย้อนกลับ"><div class="actions"><button class="btn danger" id="spGo" disabled>ยืนยันย้อนกลับ</button></div><div class="auto" id="spMsg"></div></div>
     <hr style="border-color:var(--line)">
@@ -1053,7 +1054,7 @@ function showSavepointPanel() {
       <div class="actions"><button class="btn primary" id="spNew">บันทึกจุด save ใหม่จากสถานะตอนนี้</button></div>` : `<p class="muted">ครบ ${SP_KEYS.length} จุดแล้ว</p>`}`);
   panelMode = "savepoint";
   $id("spNew") && ($id("spNew").onclick = async () => {
-    const sp2 = { label: $id("spName").value.trim() || nextKey, createdAt: new Date().toISOString(), grid: JSON.parse(JSON.stringify(gridMeta)), tagCount: data.tags.length, tags: tagSnapshot() };
+    const sp2 = { label: $id("spName").value.trim() || nextKey, createdAt: new Date().toISOString(), grid: JSON.parse(JSON.stringify(gridMeta)), tagCount: data.tags.length, tagsJson: JSON.stringify(tagSnapshot()) };
     try { await store.setMeta(nextKey, sp2); savepoints[nextKey] = sp2; toast("บันทึกจุด save แล้ว"); showSavepointPanel(); }
     catch (e) { toast("บันทึกไม่สำเร็จ: " + (e?.code || e?.message || e), 6000); }
   });
@@ -1076,12 +1077,13 @@ async function restoreSavepoint(sp) {
       const worker = async () => { while (q.length) { const d = q.shift(); try { await store.deleteTag(d); done++; } catch (_) {} msg(`ลบแล้ว ${done} / ${after.length}`); } };
       await Promise.all(Array.from({ length: 8 }, worker));
     }
-    if (sp.tags) {
+    const spTags = snapTags(sp);
+    if (spTags.length) {
       // คืนรายการตามสำเนา (ตำแหน่ง/ข้อมูล) — รูปถ่ายเดิมยังอยู่ถ้ารายการไม่ถูกลบ
-      let done = 0; const q = sp.tags.slice();
+      let done = 0; const q = spTags.slice();
       const worker = async () => { while (q.length) { const t = q.shift(); const cur = data.tags.find((x) => x._doc === t._doc);
         if (!cur || cur.updatedAt !== t.updatedAt) { try { await store.saveTag({ ...t, photoCount: cur?.photoCount ?? t.photoCount ?? 0 }, null); } catch (_) {} }
-        done++; msg(`คืนรายการ ${done} / ${sp.tags.length}`); } };
+        done++; msg(`คืนรายการ ${done} / ${spTags.length}`); } };
       await Promise.all(Array.from({ length: 8 }, worker));
     }
     const g = { ...sp.grid, restoredFrom: sp.createdAt };
