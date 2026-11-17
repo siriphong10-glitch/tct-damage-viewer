@@ -187,6 +187,7 @@ async function loadTags() {
   store.onAuth((a) => { auth = a; applyAuth(); });
   store.subscribe(onTags, (e) => { console.error(e); setSync("err", "โหลดข้อมูลไม่ได้"); });
   if (store.subscribeMeta) store.subscribeMeta("grid", (m) => setGridMeta(m));
+  if (store.subscribeMeta) store.subscribeMeta("savepoint", (m) => { savepoint = m; if (panelMode === "savepoint") showSavepointPanel(); });
   applyAuth();
 }
 let pendingTags = null, tagTimer = 0;
@@ -820,8 +821,11 @@ let gridGroup = null;
 const gridLabelEls = [];
 function setGridMeta(m) {
   gridMeta = m && Array.isArray(m.points) ? m : { points: [] };
-  const f = gridMeta.points.length >= 3 ? G.fitGrid(gridMeta.points, { zTable: gridMeta.zTable || null }) : null;
-  gridModel = f && !f.error ? f : null;
+  if (gridMeta.axes) { gridModel = G.axesModel(gridMeta.axes, gridMeta.zTable || null); }
+  else {
+    const f = gridMeta.points.length >= 3 ? G.fitGrid(gridMeta.points, { zTable: gridMeta.zTable || null }) : null;
+    gridModel = f && !f.error ? f : null;
+  }
   if (gridShown) drawGrid();
   if (panelMode === "grid") showGridPanel();
 }
@@ -865,7 +869,8 @@ function showGridPanel() {
   const pts = gridMeta.points;
   const fit = pts.length >= 3 ? G.fitGrid(pts, { zTable: gridMeta.zTable || null }) : null;
   const res = fit && !fit.error ? new Map(fit.residuals.map((r) => [r.label, r])) : new Map();
-  const quality = !fit ? `<p class="muted">ต้องมีจุดอ้างอิงอย่างน้อย 3 จุด กระจายทั้งแนวตัวอักษรและแนวตัวเลข แนะนำ A/1, AP/1, AP/15 และเพิ่มจุดที่ 4–5 ไว้ตรวจ</p>`
+  const quality = gridMeta.axes ? `<div class="fit">กริดปรับตามแนวคานที่วัดจาก point cloud (${esc(gridMeta.axes.note || "")})</div><p class="muted">ถ้าเพิ่มหรือลบจุดอ้างอิง ระบบจะกลับไปใช้การคำนวณจากจุดอ้างอิงแทน</p>`
+    : !fit ? `<p class="muted">ต้องมีจุดอ้างอิงอย่างน้อย 3 จุด กระจายทั้งแนวตัวอักษรและแนวตัวเลข แนะนำ A/1, AP/1, AP/15 และเพิ่มจุดที่ 4–5 ไว้ตรวจ</p>`
     : fit.error ? `<p class="warn">${esc(fit.error)}</p>`
     : `<div class="fit ${fit.rms > 0.5 ? "bad" : ""}">กริดตั้งฉาก · ความคลาดเคลื่อนเฉลี่ย ${fmt(fit.rms)} ม. · ระยะจริงเทียบแบบ: แนวตัวอักษร ${fmt(fit.scaleU * 100, 1)}% · แนวตัวเลข ${fmt(fit.scaleV * 100, 1)}%${gridMeta.zTable ? ` · ระดับผิวท่าวัดจากโมเดล ${Object.keys(gridMeta.zTable).length} จุดตัด` : ""}</div>
        <p class="muted">${pts.length === 3 ? "3 จุดพอดีเป๊ะเสมอ ให้เพิ่มจุดที่ 4 เพื่อตรวจความถูกต้อง" : fit.rms > 0.5 ? "คลาดเกิน 0.5 ม. — ตรวจว่าใส่ชื่อกริดถูกหรือแตะตรงจุดตัดจริง" : "ใช้ได้ — กด 'แสดงเส้นกริด' แล้วดูว่าเส้นทับรอยต่อแผ่นพื้นและแนวคานหรือไม่"}</p>`;
@@ -907,7 +912,8 @@ function askGridLabel(xyz) {
   };
 }
 async function saveGrid(points) {
-  try { await store.setMeta("grid", { points }); setGridMeta({ points }); showGridPanel(); }
+  const next = { points, zTable: gridMeta.zTable || null, previousAxes: gridMeta.axes || gridMeta.previousAxes || null };
+  try { await store.setMeta("grid", next); setGridMeta(next); showGridPanel(); }
   catch (e) { toast("บันทึกจุดอ้างอิงไม่สำเร็จ: " + (e?.code || e?.message || e), 6000); }
 }
 
@@ -1021,6 +1027,46 @@ function showDeletePanel(scope) {
   };
 }
 
+// ---------- จุด save (ย้อนกลับมาที่สถานะกริดที่วางเสร็จแล้ว) ----------
+let savepoint = null;   // projects/{key}/meta/savepoint
+function showSavepointPanel() {
+  const sp = savepoint;
+  const after = sp ? data.tags.filter((t) => String(t.createdAt || "") > sp.createdAt) : [];
+  openPanel("จุด save", sp ? `
+    <div class="fit">${esc(sp.label || "จุด save")}<br><span class="muted">บันทึกเมื่อ ${esc(new Date(sp.createdAt).toLocaleString("th-TH"))} · ตอนนั้นมีรายการในโมเดล ${sp.tagCount} รายการ</span></div>
+    <p>ถ้าย้อนกลับ ระบบจะ</p>
+    <ul class="muted"><li>คืนค่ากริดอ้างอิงให้เหมือนตอน save</li>
+      <li>${after.length ? `ลบรายการที่เพิ่มหลังจุด save ${after.length} รายการ (ดาวน์โหลดไฟล์สำรองให้ก่อน)` : "ไม่มีรายการที่เพิ่มหลังจุด save"}</li></ul>
+    <div class="form"><label>พิมพ์คำว่า “ย้อนกลับ” เพื่อยืนยัน</label><input id="spWord" autocomplete="off"></div>
+    <div class="actions"><button class="btn danger" id="spGo" disabled>ย้อนกลับไปจุด save</button></div>
+    <div class="auto" id="spMsg"></div>
+    <hr style="border-color:var(--line)">
+    <div class="actions"><button class="btn" id="spNew">บันทึกจุด save ใหม่แทนที่ (ใช้สถานะตอนนี้)</button></div>`
+    : `<p class="muted">ยังไม่มีจุด save</p><div class="actions"><button class="btn primary" id="spNew">บันทึกจุด save จากสถานะตอนนี้</button></div>`);
+  panelMode = "savepoint";
+  $id("spNew").onclick = async () => {
+    const sp2 = { label: "กริดวางเสร็จแล้ว", createdAt: new Date().toISOString(), grid: JSON.parse(JSON.stringify(gridMeta)), tagCount: data.tags.length };
+    try { await store.setMeta("savepoint", sp2); savepoint = sp2; toast("บันทึกจุด save แล้ว"); showSavepointPanel(); }
+    catch (e) { toast("บันทึกไม่สำเร็จ: " + (e?.code || e?.message || e), 6000); }
+  };
+  if (!sp) return;
+  $id("spWord").oninput = (e) => { $id("spGo").disabled = e.target.value.trim() !== "ย้อนกลับ"; };
+  $id("spGo").onclick = async () => {
+    $id("spGo").disabled = true;
+    try {
+      if (after.length) {
+        await exportJson(after);
+        let done = 0; const q = after.map((t) => t._doc);
+        const worker = async () => { while (q.length) { const d = q.shift(); try { await store.deleteTag(d); done++; } catch (_) {} $id("spMsg") && ($id("spMsg").textContent = `ลบแล้ว ${done} / ${after.length}`); } };
+        await Promise.all(Array.from({ length: 8 }, worker));
+      }
+      const g = { ...sp.grid, restoredFrom: sp.createdAt };
+      await store.setMeta("grid", g); setGridMeta(g);
+      toast("ย้อนกลับไปจุด save แล้ว", 5000); closePanel();
+    } catch (e) { $id("spMsg").textContent = "ย้อนกลับไม่สำเร็จ: " + (e?.code || e?.message || e); }
+  };
+}
+
 // ---------- UI wiring ----------
 function hideMenus() { $id("moreMenu").hidden = true; $id("legend").hidden = true; }
 $id("btnList").onclick = () => { hideMenus(); setListOpen(!listOpen); };
@@ -1040,6 +1086,7 @@ $id("moreMenu").onclick = (e) => {
   if (act === "csv") exportCsv();
   if (act === "editors") showEditors();
   if (act === "grid") showGridPanel();
+  if (act === "savepoint") showSavepointPanel();
   if (act === "report") showReportImport();
   if (act === "del-report") showDeletePanel("report");
   if (act === "del-all") showDeletePanel("all");

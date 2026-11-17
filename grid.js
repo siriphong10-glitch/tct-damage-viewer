@@ -113,7 +113,29 @@ export function fitAffine(pts) {
   model.skewDeg = 90 - Math.acos(Math.max(-1, Math.min(1, dot))) * 180 / Math.PI;
   return model;
 }
+// กริดที่วัดจากแนวคานในโมเดลโดยตรง: ตำแหน่งจริงของแต่ละแนว (ม.) ตามแกน eu/ev จากจุดเริ่ม O
+export function axesModel(axes, zTable) {
+  const m = { kind: "axes", axes, zTable: zTable || null };
+  const { eu, ev } = axes;
+  // ให้ cx/cy เป็นค่าประมาณเชิงเส้น (ใช้กับส่วนที่ต้องการทิศทาง เช่น ป้ายกริด/การเรียงหมุด)
+  const su = (axes.uPos[axes.uPos.length - 1] - axes.uPos[0]) / (U_LIST[U_LIST.length - 1] - U_LIST[0]);
+  const vl = NUMBERS.map((N) => numDist(N));
+  const sv = (axes.vPos[axes.vPos.length - 1] - axes.vPos[0]) / (vl[vl.length - 1] - vl[0]);
+  m.cx = [axes.O[0], su * eu[0], sv * ev[0]]; m.cy = [axes.O[1], su * eu[1], sv * ev[1]]; m.cz = [1.3, 0, 0];
+  m.scaleU = su; m.scaleV = sv; m.skewDeg = 0;
+  return m;
+}
+function interp(xs, ys, x) {
+  if (x <= xs[0]) return ys[0] + (x - xs[0]) * (ys[1] - ys[0]) / (xs[1] - xs[0]);
+  for (let i = 0; i < xs.length - 1; i++) if (x <= xs[i + 1]) return ys[i] + (x - xs[i]) * (ys[i + 1] - ys[i]) / (xs[i + 1] - xs[i]);
+  const n = xs.length - 1; return ys[n] + (x - xs[n]) * (ys[n] - ys[n - 1]) / (xs[n] - xs[n - 1]);
+}
 export function toWorld(model, u, v) {
+  if (model.kind === "axes") {
+    const a = model.axes, ru = interp(U_LIST, a.uPos, u), rv = interp(NUMBERS.map((N) => numDist(N)), a.vPos, v);
+    const z = model.zTable ? zFromTable(model.zTable, u, v) : null;
+    return [a.O[0] + ru * a.eu[0] + rv * a.ev[0], a.O[1] + ru * a.eu[1] + rv * a.ev[1], z ?? 1.3];
+  }
   const f = (c) => c[0] + c[1] * u + c[2] * v;
   const z = model.zTable ? zFromTable(model.zTable, u, v) : null;
   return [f(model.cx), f(model.cy), z ?? f(model.cz)];
