@@ -1,5 +1,5 @@
 import * as THREE from "./libs/three/three.module.js";
-import * as G from "./grid.js";
+import * as G from "./grid.js?v=20261117b";
 
 const C = window.APP_CONFIG;
 const params = new URLSearchParams(location.search);
@@ -187,7 +187,7 @@ async function loadTags() {
   store.onAuth((a) => { auth = a; applyAuth(); });
   store.subscribe(onTags, (e) => { console.error(e); setSync("err", "โหลดข้อมูลไม่ได้"); });
   if (store.subscribeMeta) store.subscribeMeta("grid", (m) => setGridMeta(m));
-  if (store.subscribeMeta) SP_KEYS.forEach((k) => store.subscribeMeta(k, (m) => { if (m) savepoints[k] = m; else delete savepoints[k]; if (panelMode === "savepoint") showSavepointPanel(); }));
+  if (store.subscribeMeta) SP_KEYS.forEach((k) => store.subscribeMeta(k, (m) => { if (m && !m.deleted) savepoints[k] = m; else delete savepoints[k]; if (panelMode === "savepoint") showSavepointPanel(); }));
   applyAuth();
 }
 let pendingTags = null, tagTimer = 0;
