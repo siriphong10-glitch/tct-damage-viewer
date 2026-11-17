@@ -820,7 +820,7 @@ let gridGroup = null;
 const gridLabelEls = [];
 function setGridMeta(m) {
   gridMeta = m && Array.isArray(m.points) ? m : { points: [] };
-  const f = gridMeta.points.length >= 3 ? G.fitGrid(gridMeta.points) : null;
+  const f = gridMeta.points.length >= 3 ? G.fitGrid(gridMeta.points, { zTable: gridMeta.zTable || null }) : null;
   gridModel = f && !f.error ? f : null;
   if (gridShown) drawGrid();
   if (panelMode === "grid") showGridPanel();
@@ -835,20 +835,20 @@ function drawGrid() {
   if (!gridModel || !overlayGroup) return;
   gridGroup = new THREE.Group();
   const mat = occludable(new THREE.LineBasicMaterial({ color: 0x58a6ff, transparent: true, opacity: 0.9 }));
-  const seg = (a, b) => {
-    const g = new THREE.BufferGeometry().setFromPoints([toLocal(a), toLocal(b)]);
+  // เส้นกริดพาดตามผิวท่า: ผ่านทุกจุดตัด โดยใช้ระดับผิวที่วัดจาก point cloud
+  const poly = (ws) => {
+    const g = new THREE.BufferGeometry().setFromPoints(ws.map((w) => toLocal([w[0], w[1], w[2] + 0.05])));
     const l = new THREE.Line(g, mat); l.renderOrder = 8; gridGroup.add(l);
   };
-  const lift = (w) => [w[0], w[1], w[2] + 0.05];
   const iN = G.LETTERS.indexOf("N");
   G.LETTERS.forEach((L, i) => {
-    const nMax = i < iN ? "3" : "15";
-    seg(lift(G.gridWorld(gridModel, L, "1")), lift(G.gridWorld(gridModel, L, nMax)));
+    const nMax = i < iN ? 3 : 15;
+    poly(G.NUMBERS.slice(0, nMax).map((N) => G.gridWorld(gridModel, L, N)));
     addGridLabel(L, G.gridWorld(gridModel, L, "1"), -1.5, 0);
   });
   G.NUMBERS.forEach((N) => {
     const k = Number(N);
-    seg(lift(G.gridWorld(gridModel, k <= 3 ? "A" : "N", N)), lift(G.gridWorld(gridModel, "AP", N)));
+    poly(G.LETTERS.slice(k <= 3 ? 0 : iN).map((L) => G.gridWorld(gridModel, L, N)));
     addGridLabel(N, G.gridWorld(gridModel, "AP", N), 0, 1.5);
   });
   overlayGroup.add(gridGroup);
@@ -863,11 +863,11 @@ function addGridLabel(text, w, dv, du) {
 }
 function showGridPanel() {
   const pts = gridMeta.points;
-  const fit = pts.length >= 3 ? G.fitGrid(pts) : null;
+  const fit = pts.length >= 3 ? G.fitGrid(pts, { zTable: gridMeta.zTable || null }) : null;
   const res = fit && !fit.error ? new Map(fit.residuals.map((r) => [r.label, r])) : new Map();
   const quality = !fit ? `<p class="muted">ต้องมีจุดอ้างอิงอย่างน้อย 3 จุด กระจายทั้งแนวตัวอักษรและแนวตัวเลข แนะนำ A/1, AP/1, AP/15 และเพิ่มจุดที่ 4–5 ไว้ตรวจ</p>`
     : fit.error ? `<p class="warn">${esc(fit.error)}</p>`
-    : `<div class="fit ${fit.rms > 0.5 ? "bad" : ""}">ความคลาดเคลื่อนเฉลี่ย ${fmt(fit.rms)} ม. · สเกลแนวตัวอักษร ${fmt(fit.scaleU * 100, 1)}% · แนวตัวเลข ${fmt(fit.scaleV * 100, 1)}% ของแบบ · มุมเบี้ยว ${fmt(fit.skewDeg, 1)}°</div>
+    : `<div class="fit ${fit.rms > 0.5 ? "bad" : ""}">กริดตั้งฉาก · ความคลาดเคลื่อนเฉลี่ย ${fmt(fit.rms)} ม. · ระยะจริงเทียบแบบ: แนวตัวอักษร ${fmt(fit.scaleU * 100, 1)}% · แนวตัวเลข ${fmt(fit.scaleV * 100, 1)}%${gridMeta.zTable ? ` · ระดับผิวท่าวัดจากโมเดล ${Object.keys(gridMeta.zTable).length} จุดตัด` : ""}</div>
        <p class="muted">${pts.length === 3 ? "3 จุดพอดีเป๊ะเสมอ ให้เพิ่มจุดที่ 4 เพื่อตรวจความถูกต้อง" : fit.rms > 0.5 ? "คลาดเกิน 0.5 ม. — ตรวจว่าใส่ชื่อกริดถูกหรือแตะตรงจุดตัดจริง" : "ใช้ได้ — กด 'แสดงเส้นกริด' แล้วดูว่าเส้นทับรอยต่อแผ่นพื้นและแนวคานหรือไม่"}</p>`;
   openPanel("กริดอ้างอิง", `
     <p class="muted">แตะจุดตัดกริดบนโมเดลที่รู้แน่ว่าเป็นกริดไหน แล้วใส่ชื่อกริด ระบบจะคำนวณกริดทั้งผืนให้ (ระยะตามแบบ: A–N 4.00 ม., N–AP 3.50 ม., แนวตัวเลข 3.50 ม.)</p>
