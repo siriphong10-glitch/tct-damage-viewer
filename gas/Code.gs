@@ -72,7 +72,7 @@ function doPost(e) {
     else if (body.a === 'deleteTags') res = deleteTags_(body.docs || []);
     else if (body.a === 'setMeta') res = setMeta_(body.name, body.data, body.by);
     else if (body.a === 'setPhotos') res = setPhotos_(body.doc, body.photos || []);
-    else if (body.a === 'setPhotosMany') { (body.items || []).forEach(function (it) { setPhotos_(it.doc, it.photos || []); }); res = { done: (body.items || []).length }; }
+    else if (body.a === 'setPhotosMany') { (body.items || []).forEach(function (it) { setPhotos_(it.doc, it.photos || [], !!body.fresh); }); res = { done: (body.items || []).length }; }
     else if (body.a === 'import') res = importAll_(body);
     else return out_({ ok: false, error: 'unknown-action' });
     return out_(Object.assign({ ok: true, rev: rev_() }, res));
@@ -234,11 +234,15 @@ function setMeta_(name, data, by) {
 }
 
 // ---------- รูปถ่าย ----------
-function setPhotos_(doc, photos) {
+function setPhotos_(doc, photos, fresh) {
   const pf = DriveApp.getFolderById(prop_('PHOTO_ID'));
-  const it = pf.getFoldersByName(String(doc));
-  let f = it.hasNext() ? it.next() : pf.createFolder(String(doc));
-  const old = f.getFiles(); while (old.hasNext()) old.next().setTrashed(true);
+  let f;
+  if (fresh) f = pf.createFolder(String(doc)); // รายการใหม่ที่ยังไม่มีรูป: ข้ามการค้นหาเพื่อความเร็ว
+  else {
+    const it = pf.getFoldersByName(String(doc));
+    f = it.hasNext() ? it.next() : pf.createFolder(String(doc));
+    const old = f.getFiles(); while (old.hasNext()) old.next().setTrashed(true);
+  }
   photos.forEach(function (p, i) {
     const m = /^data:([^;]+);base64,(.*)$/.exec(p || '');
     if (!m) return;
