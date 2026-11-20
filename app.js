@@ -325,7 +325,7 @@ function removeOverlay(id) {
 }
 function shownOnModel(t) {
   const ft = $id("fType").value, fs = $id("fSev").value, fsf = $id("fSurf").value;
-  return (!ft || t.type === ft) && (fs === "" || Number(t.severity ?? 0) === +fs) && (!fsf || (t.surface || "manual") === fsf);
+  return (!ft || t.type === ft) && (fs === "" || Number(t.severity ?? 0) === +fs) && (!fsf || (fsf === "check" ? !!t.needsReview : (t.surface || "manual") === fsf));
 }
 function rebuildAll() {
   refreshOcclusion();
@@ -347,7 +347,8 @@ function renderLabels(rebuild = false) {
       const el = document.createElement("div");
       el.className = "tag-label";
       if (t.approx) el.classList.add("approx");
-      el.innerHTML = `<span class="chip" style="background:${sev(t.severity).color}">${esc(t.id)}</span><span class="stem"></span><span class="pin"></span>`;
+      if (t.needsReview) el.classList.add("check");
+      el.innerHTML = `<span class="chip" style="background:${sev(t.severity).color}">${esc(t.id)}${t.needsReview ? " ?" : ""}</span><span class="stem"></span><span class="pin"></span>`;
       el.addEventListener("click", (ev) => { ev.stopPropagation(); showDetail(t.id); });
       host.appendChild(el); labelEls.set(t.id, el);
     }
@@ -468,6 +469,9 @@ function startDraw(kind) {
   $id("btnFinish").hidden = kind !== "area";
   $id("drawHint").textContent = kind === "pin" ? "แตะตำแหน่งความเสียหายบนโมเดล" : kind === "gridpt" ? "แตะจุดตัดกริดบนโมเดล (เช่น มุมเสา/รอยต่อแผ่นพื้น)" : "แตะมุมของพื้นที่ทีละจุด (อย่างน้อย 3 จุด) แล้วกด เสร็จ";
 }
+function pickPoint(hint, cb) {
+  startDraw("gridpt"); draw.onPick = cb; $id("drawHint").textContent = hint;
+}
 function addDrawPoint(p) {
   if (draw.kind === "gridpt") { const cb = draw.onPick; cancelDraw(); cb([p.x, p.y, p.z]); return; }
   if (draw.kind === "pin") {
@@ -548,7 +552,9 @@ function showDetail(id) {
   ];
   if (t.reportArea != null) rows.push(["พื้นที่ตามรายงาน", `${fmt(t.reportArea)} ตร.ม.`]);
   if (t.gridText) rows.push(["ตำแหน่งตามรายงาน", `${t.surface === "under" ? "ใต้ท่า" : "ผิวบนท่า"} · Zone ${esc(t.zone || "-")} · Grid ${esc(t.gridText)}<br><span class="muted">${esc(t.locText || "")}</span>`]);
-  if (t.approx) rows.push(["ความแม่นตำแหน่ง", "โดยประมาณ — รายงานระบุได้ถึงระดับช่องกริด จุดในโมเดลไม่ใช่ตำแหน่งจริงของแผล"]);
+  if (t.posStatus) rows.push(["ที่มาของตำแหน่ง", POS_TEXT[t.posStatus] || esc(t.posStatus)]);
+  else if (t.approx) rows.push(["ความแม่นตำแหน่ง", "โดยประมาณ — รายงานระบุได้ถึงระดับช่องกริด จุดในโมเดลไม่ใช่ตำแหน่งจริงของแผล"]);
+  if (t.needsReview) rows.push(["⚠ ต้องตรวจตำแหน่ง", `<span class="warn-txt">${esc(t.posNote || "ยังไม่ชัวร์ว่าตำแหน่งถูกต้อง")}</span>`]);
   if (t.rangeBox) rows.push(["กรอบที่แสดง", `ขอบเขตช่วงกริดที่รายงานระบุ (${fmt(t.area)} ตร.ม.) ความเสียหายกระจายอยู่ภายในกรอบ ไม่ได้เต็มกรอบ`]);
   if (t.kind === "area" && !t.rangeBox) {
     rows.push(["พื้นที่ (วัดจากโมเดล)", `${fmt(t.area)} ตร.ม.`]);
@@ -571,6 +577,8 @@ function showDetail(id) {
     <div class="actions">
       <button class="btn" id="dFly">ไปที่ตำแหน่งนี้</button>
       <button class="btn" id="dLink">คัดลอกลิงก์</button>
+      ${EDIT && t.kind !== "area" ? `<button class="btn" id="dMove">ย้ายหมุด</button>` : ""}
+      ${EDIT && t.needsReview ? `<button class="btn" id="dOk">ยืนยันตำแหน่งนี้</button>` : ""}
       ${EDIT ? `<button class="btn primary" id="dEdit">แก้ไข</button><button class="btn danger" id="dDel">ลบ</button>` : ""}
     </div>`;
   openPanel(`${t.id} · ${t.kind === "area" ? "พื้นที่ความเสียหาย" : "จุดความเสียหาย"}`, html);
@@ -583,6 +591,18 @@ function showDetail(id) {
     box.querySelectorAll("img").forEach((img) => img.onclick = () => lightbox(img.src));
   }).catch(() => { const box = $id("dPhotos"); if (box) box.innerHTML = `<span class="muted">โหลดรูปไม่ได้</span>`; });
   if (EDIT) {
+    if ($id("dMove")) $id("dMove").onclick = () => {
+      pickPoint("แตะตำแหน่งใหม่ของหมุดบนโมเดล (ใต้ท่า: แตะที่ผิวคาน/พื้นด้านล่าง)", async (p) => {
+        const now = new Date().toISOString();
+        const nt = { ...t, position: p.map(r3), camera: { position: [p[0], p[1] - 10, p[2] + (t.surface === "under" ? -5 : 12)].map(r3) },
+          posStatus: "manual", needsReview: false, posNote: "", approx: false, updatedAt: now };
+        try { await writeTag(nt, null); toast(`ย้าย ${t.id} แล้ว`); showDetail(t.id); } catch (_) {}
+      });
+    };
+    if ($id("dOk")) $id("dOk").onclick = async () => {
+      const nt = { ...t, needsReview: false, posStatus: t.posStatus === "cell" ? "confirmed" : (t.posStatus || "confirmed"), posNote: "", updatedAt: new Date().toISOString() };
+      try { await writeTag(nt, null); toast(`ยืนยันตำแหน่ง ${t.id} แล้ว`); } catch (_) {}
+    };
     $id("dEdit").onclick = () => showForm(t.id);
     const del = $id("dDel");
     del.onclick = () => {
@@ -748,7 +768,7 @@ function renderList() {
   const items = [...data.tags].sort(byId).filter(shownOnModel);
   $id("listItems").innerHTML = items.length ? items.map((t) => `<div class="list-item${t.id === activeId ? " sel" : ""}" data-id="${esc(t.id)}">
       <span class="dot" style="background:${sev(t.severity).color};margin-top:4px"></span>
-      <div><b>${esc(t.id)}</b> ${esc(t.type)}<div class="meta">${esc(t.element || "")}${t.kind === "area" ? ` · ${fmt(t.area)} ตร.ม.` : ""}${t.photoCount ? ` · รูป ${t.photoCount}` : ""}</div></div>
+      <div><b>${esc(t.id)}</b> ${esc(t.type)}<div class="meta">${esc(t.element || "")}${t.kind === "area" ? ` · ${fmt(t.area)} ตร.ม.` : ""}${t.photoCount ? ` · รูป ${t.photoCount}` : ""}${t.needsReview ? ` · <span class="warn-txt">⚠ ตรวจตำแหน่ง</span>` : ""}</div></div>
     </div>`).join("") : `<p class="muted">${data.tags.length ? "ไม่มีรายการตามตัวกรอง" : (EDIT ? "ยังไม่มีรายการ — กด ＋ ปักหมุด หรือ ▱ วาดพื้นที่" : "ยังไม่มีรายการความเสียหาย")}</p>`;
   $id("listItems").querySelectorAll(".list-item").forEach((el) => el.onclick = () => {
     const t = data.tags.find((x) => x.id === el.dataset.id); flyTo(t); showDetail(t.id);
@@ -757,7 +777,7 @@ function renderList() {
 }
 $id("fType").innerHTML = `<option value="">ทุกประเภท</option>${DAMAGE_TYPES.map((d) => `<option>${esc(d)}</option>`).join("")}`;
 $id("fSev").innerHTML = `<option value="">ทุกระดับ</option>${SEVERITY.map((s) => `<option value="${s.key}">${s.label}</option>`).join("")}`;
-$id("fSurf").innerHTML = `<option value="">ทุกตำแหน่ง</option><option value="top">ผิวบนท่า</option><option value="under">ใต้ท่า</option><option value="manual">ปักเอง</option>`;
+$id("fSurf").innerHTML = `<option value="">ทุกตำแหน่ง</option><option value="top">ผิวบนท่า</option><option value="under">ใต้ท่า</option><option value="manual">ปักเอง</option><option value="check">⚠ ตำแหน่งยังไม่ชัวร์</option>`;
 $id("fType").onchange = $id("fSev").onchange = $id("fSurf").onchange = () => { rebuildAll(); };
 $id("btnCloseList").onclick = () => setListOpen(false);
 
@@ -958,6 +978,13 @@ async function saveGrid(points) {
 
 // ---------- นำเข้ารายการจากรายงาน ----------
 const REPORT_SOURCE = "report-cpac-20261106";
+const POS_TEXT = {
+  arrow: "ตามปลายลูกศรในภาพร่างของรายงาน (ค่าประมาณ ±0.5–1 ม.)",
+  "arrow-check": "ตามปลายลูกศรในภาพร่างของรายงาน แต่ยังไม่ชัวร์",
+  cell: "ยังไม่ได้ย้าย — วางไว้ในช่องกริดตามรายงาน (ไม่ใช่ตำแหน่งจริงของแผล)",
+  manual: "ย้ายด้วยมือในโมเดลแล้ว",
+  confirmed: "ตรวจและยืนยันตำแหน่งแล้ว",
+};
 const UNDER_DEPTH = 0.6;   // วางหมุดใต้ท่าต่ำกว่าผิวพื้นโดยประมาณ (ม.)
 const SEV_MAP = { "เล็กน้อย": 1, "ปานกลาง": 2, "เร่งด่วน": 3 };
 let reportItems = null;

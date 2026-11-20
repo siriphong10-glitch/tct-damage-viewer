@@ -144,3 +144,6 @@ body.panel-open{--r:400px}
 .filters{flex-wrap:wrap}
 .tag-label.far .chip,.tag-label.far .stem{display:none}
 .tag-label.far .pin{width:7px;height:7px;background:#8b949e}
+
+.tag-label.check .chip{box-shadow:0 0 0 2px #ffcc00,0 0 0 4px #0008}
+.warn-txt{color:#b26b00;font-weight:600}
