@@ -84,8 +84,13 @@ function out_(o) { return ContentService.createTextOutput(JSON.stringify(o)).set
 function outText_(s) { return ContentService.createTextOutput(s).setMimeType(ContentService.MimeType.JSON); }
 
 // ---------- รุ่นข้อมูล + แคช ----------
-function rev_() { return Number(prop_('REV') || 1); }
-function bump_() { const r = rev_() + 1; props_().setProperty('REV', String(r)); return r; }
+// รุ่นข้อมูล = ตัวนับการเขียนผ่านเว็บ + เวลาแก้ไขล่าสุดของชีต (จับการแก้ในชีตโดยตรงได้ด้วย)
+function rev_() {
+  let lu = 0;
+  try { lu = DriveApp.getFileById(prop_('SHEET_ID')).getLastUpdated().getTime(); } catch (e) {}
+  return (prop_('REV') || '1') + '.' + lu;
+}
+function bump_() { props_().setProperty('REV', String(Number(prop_('REV') || 1) + 1)); return rev_(); }
 function metaRevs_() { const s = prop_('META_REVS'); return s ? JSON.parse(s) : {}; }
 
 function allJson_() {

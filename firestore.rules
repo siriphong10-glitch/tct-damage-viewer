@@ -1,58 +1,11 @@
 rules_version = '2';
-// TCT Damage Viewer — ทุกคนดูได้ / แก้ไขได้เมื่อเปิดผ่านลิงก์แก้ไข (มีรหัสลับ) หรือเป็นเจ้าของ
+// เลิกใช้ฐานข้อมูลนี้ตั้งแต่ 20 พ.ย. 2569 — ย้ายไป Google Sheet/Drive แล้ว (ดูโฟลเดอร์ gas/)
+// เก็บข้อมูลเดิมไว้เป็นสำรอง: อ่านได้ แต่ห้ามเขียน
 service cloud.firestore {
   match /databases/{database}/documents {
-    function signedIn() {
-      return request.auth != null && request.auth.token.email_verified == true;
-    }
-    function isOwner() {
-      return signedIn() && request.auth.token.email == 'siriphong10@gmail.com';
-    }
-    // ผู้ที่เปิดลิงก์แก้ไข (มีรหัสลับ) จะได้สิทธิ์ผ่านเอกสาร grants/{uid}
-    function hasGrant() {
-      return request.auth != null
-        && exists(/databases/$(database)/documents/grants/$(request.auth.uid));
-    }
-    function isEditor() {
-      return isOwner() || hasGrant() || (signedIn()
-        && exists(/databases/$(database)/documents/config/editors)
-        && request.auth.token.email in get(/databases/$(database)/documents/config/editors).data.emails);
-    }
-
-    match /grants/{uid} {
-      allow create: if request.auth != null && request.auth.uid == uid
-        && request.resource.data.key == '<EDIT_KEY — ดูใน Firebase console>';
-      allow read: if request.auth != null && request.auth.uid == uid;
-      allow update, delete: if false;
-    }
-
-    match /config/editors {
-      allow read: if signedIn();
-      allow write: if isOwner()
-        && request.resource.data.emails is list
-        && request.resource.data.emails.size() <= 50;
-    }
-
-    match /projects/{project}/meta/{name} {
+    match /{document=**} {
       allow read: if true;
-      allow write: if isEditor();
-    }
-
-    match /projects/{project}/tags/{tagId} {
-      allow read: if true;
-      allow create, update: if isEditor()
-        && request.resource.data.id is string
-        && request.resource.data.id.size() > 0
-        && request.resource.data.id.size() <= 30;
-      allow delete: if isEditor();
-
-      match /photos/{photoId} {
-        allow read: if true;
-        allow create, update: if isEditor()
-          && request.resource.data.data is string
-          && request.resource.data.data.size() < 900000;
-        allow delete: if isEditor();
-      }
+      allow write: if false;
     }
   }
 }
