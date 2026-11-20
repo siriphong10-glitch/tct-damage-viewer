@@ -72,6 +72,7 @@ function doPost(e) {
     else if (body.a === 'deleteTags') res = deleteTags_(body.docs || []);
     else if (body.a === 'setMeta') res = setMeta_(body.name, body.data, body.by);
     else if (body.a === 'setPhotos') res = setPhotos_(body.doc, body.photos || []);
+    else if (body.a === 'setPhotosMany') { (body.items || []).forEach(function (it) { setPhotos_(it.doc, it.photos || []); }); res = { done: (body.items || []).length }; }
     else if (body.a === 'import') res = importAll_(body);
     else return out_({ ok: false, error: 'unknown-action' });
     return out_(Object.assign({ ok: true, rev: rev_() }, res));
