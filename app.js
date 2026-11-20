@@ -136,7 +136,7 @@ function applyAuth() {
   if (!draw) $id("editbar").hidden = !EDIT;
   const b = $id("btnLogin");
   $id("menuShare").hidden = !EDIT; $id("menuTools").hidden = !EDIT;
-  if (!store || (!params.has("admin") && !(auth.user && !auth.user.isAnonymous))) { b.hidden = true; $id("menuEditors").hidden = true; renderList(); return; }
+  if (!store || store.kind === "gas" || (!params.has("admin") && !(auth.user && !auth.user.isAnonymous))) { b.hidden = true; $id("menuEditors").hidden = true; renderList(); return; }
   b.hidden = false;
   if (!auth.user || auth.user.isAnonymous) { b.textContent = "เข้าสู่ระบบ"; b.title = "เข้าสู่ระบบเพื่อแก้ไข (เฉพาะผู้ที่ได้รับสิทธิ์)"; }
   else { b.textContent = auth.email.split("@")[0] + (EDIT ? "" : " (ดูอย่างเดียว)"); b.title = auth.email + " — กดเพื่อดูตัวเลือก"; }
@@ -171,9 +171,10 @@ Potree.loadPointCloud(C.pointCloudUrl, "cloud", (e) => {
 setTimeout(() => { if (!$id("loading").hidden) $id("loading").textContent = "กำลังโหลดโมเดล… (ถ้านานผิดปกติ ให้ตรวจการเชื่อมต่ออินเทอร์เน็ต)"; }, 15000);
 
 async function loadTags() {
-  if (C.mockStore || C.firebase) {
+  if (C.mockStore || C.gasUrl || C.firebase) {
     try {
       if (C.mockStore) store = (await import(C.mockStore)).createMockStore(C);
+      else if (C.gasUrl) store = (await import("./libs/gas-store.js?v=20261120a")).createGasStore(C);
       else store = (await import("./libs/store.bundle.js")).createFirebaseStore(C);
     } catch (e) { console.error(e); store = null; toast("เชื่อมต่อฐานข้อมูลไม่ได้ — แสดงข้อมูลสำรอง", 5000); }
   }
@@ -220,6 +221,38 @@ function applyTags(tags, meta) {
 function setSync(state, text) {
   const el = $id("syncState");
   el.hidden = false; el.dataset.state = state; el.textContent = text;
+}
+// บันทึก/ลบทีละมาก ๆ — ใช้คำสั่งแบบกลุ่มถ้าที่เก็บข้อมูลรองรับ
+async function bulkSave(list, progress) {
+  let done = 0, fail = 0;
+  if (store.saveTags) {
+    for (let i = 0; i < list.length; i += 100) {
+      const part = list.slice(i, i + 100);
+      try { await store.saveTags(part); done += part.length; }
+      catch (e) { fail += part.length; if (e?.code === "permission-denied") { fail += list.length - i - part.length; progress?.(done, fail); break; } }
+      progress?.(done, fail);
+    }
+    return { done, fail };
+  }
+  const queue = list.slice();
+  const worker = async () => { while (queue.length) { const t = queue.shift(); try { await store.saveTag(t, null); done++; } catch (e) { fail++; if (e?.code === "permission-denied") queue.length = 0; } progress?.(done, fail); } };
+  await Promise.all(Array.from({ length: 8 }, worker));
+  return { done, fail };
+}
+async function bulkDelete(docs, progress) {
+  let done = 0, fail = 0;
+  if (store.deleteTags) {
+    for (let i = 0; i < docs.length; i += 200) {
+      const part = docs.slice(i, i + 200);
+      try { await store.deleteTags(part); done += part.length; } catch (_) { fail += part.length; }
+      progress?.(done, fail);
+    }
+    return { done, fail };
+  }
+  const queue = docs.slice();
+  const worker = async () => { while (queue.length) { const d = queue.shift(); try { await store.deleteTag(d); done++; } catch (_) { fail++; } progress?.(done, fail); } };
+  await Promise.all(Array.from({ length: 8 }, worker));
+  return { done, fail };
 }
 function normalize(d) {
   if (Array.isArray(d)) d = { version: 1, tags: d };
@@ -760,6 +793,12 @@ $id("importFile").onchange = async (e) => {
   try { incoming = normalize(JSON.parse(await f.text())).tags; } catch (_) { toast("ไฟล์ไม่ถูกต้อง"); e.target.value = ""; return; }
   let n = 0;
   toast(`กำลังนำเข้า ${incoming.length} รายการ…`, 10000);
+  if (store.saveTags && incoming.every((t) => !(Array.isArray(t.photos) && t.photos.length))) {
+    const list = incoming.map((t) => { const ex = data.tags.find((x) => x.id === t.id); return { ...t, _doc: ex?._doc || store.newId(), photos: undefined, photoCount: ex?.photoCount || 0 }; });
+    const r = await bulkSave(list);
+    toast(`นำเข้า ${r.done} จาก ${incoming.length} รายการแล้ว (รหัสที่ซ้ำจะเขียนทับรายการเดิม)`, 5000);
+    e.target.value = ""; return;
+  }
   for (const t of incoming) {
     const ex = data.tags.find((x) => x.id === t.id);
     const photos = Array.isArray(t.photos) ? t.photos : [];
@@ -994,11 +1033,9 @@ async function showReportImport() {
     spreadInCells(tags, gridModel);
     if (!tags.length) { $id("riMsg").textContent = "ไม่มีรายการให้นำเข้า"; return; }
     $id("riGo").disabled = true;
-    let done = 0, fail = 0;
     const now = new Date().toISOString();
     const queue = tags.map((t) => ({ ...t, _doc: store.newId(), createdAt: now, updatedAt: now, photoCount: 0 }));
-    const worker = async () => { while (queue.length) { const t = queue.shift(); try { await store.saveTag(t, null); done++; } catch (e) { fail++; if (e?.code === "permission-denied") { queue.length = 0; } } $id("riMsg") && ($id("riMsg").textContent = `บันทึกแล้ว ${done} / ${tags.length}${fail ? ` · ไม่สำเร็จ ${fail}` : ""}`); } };
-    await Promise.all(Array.from({ length: 8 }, worker));
+    const { done, fail } = await bulkSave(queue, (d, f) => { $id("riMsg") && ($id("riMsg").textContent = `บันทึกแล้ว ${d} / ${tags.length}${f ? ` · ไม่สำเร็จ ${f}` : ""}`); });
     toast(`นำเข้า ${done} รายการ${fail ? ` (ไม่สำเร็จ ${fail})` : ""}`, 5000);
     $id("fSurf").value = ""; setListOpen(true);
   };
@@ -1019,10 +1056,7 @@ function showDeletePanel(scope) {
   $id("delGo").onclick = async () => {
     $id("delGo").disabled = true;
     await exportJson(targets);
-    let done = 0, fail = 0;
-    const queue = targets.map((t) => t._doc);
-    const worker = async () => { while (queue.length) { const d = queue.shift(); try { await store.deleteTag(d); done++; } catch (_) { fail++; } $id("delMsg") && ($id("delMsg").textContent = `ลบแล้ว ${done} / ${targets.length}${fail ? ` · ไม่สำเร็จ ${fail}` : ""}`); } };
-    await Promise.all(Array.from({ length: 8 }, worker));
+    const { done, fail } = await bulkDelete(targets.map((t) => t._doc), (d, f) => { $id("delMsg") && ($id("delMsg").textContent = `ลบแล้ว ${d} / ${targets.length}${f ? ` · ไม่สำเร็จ ${f}` : ""}`); });
     toast(`ลบ ${done} รายการแล้ว${fail ? ` (ไม่สำเร็จ ${fail})` : ""}`, 5000);
   };
 }
@@ -1073,18 +1107,14 @@ async function restoreSavepoint(sp) {
     const after = data.tags.filter((t) => String(t.createdAt || "") > sp.createdAt);
     if (after.length) {
       await exportJson(after);
-      let done = 0; const q = after.map((t) => t._doc);
-      const worker = async () => { while (q.length) { const d = q.shift(); try { await store.deleteTag(d); done++; } catch (_) {} msg(`ลบแล้ว ${done} / ${after.length}`); } };
-      await Promise.all(Array.from({ length: 8 }, worker));
+      await bulkDelete(after.map((t) => t._doc), (d) => msg(`ลบแล้ว ${d} / ${after.length}`));
     }
     const spTags = snapTags(sp);
     if (spTags.length) {
       // คืนรายการตามสำเนา (ตำแหน่ง/ข้อมูล) — รูปถ่ายเดิมยังอยู่ถ้ารายการไม่ถูกลบ
-      let done = 0; const q = spTags.slice();
-      const worker = async () => { while (q.length) { const t = q.shift(); const cur = data.tags.find((x) => x._doc === t._doc);
-        if (!cur || cur.updatedAt !== t.updatedAt) { try { await store.saveTag({ ...t, photoCount: cur?.photoCount ?? t.photoCount ?? 0 }, null); } catch (_) {} }
-        done++; msg(`คืนรายการ ${done} / ${spTags.length}`); } };
-      await Promise.all(Array.from({ length: 8 }, worker));
+      const need = spTags.filter((t) => { const cur = data.tags.find((x) => x._doc === t._doc); return !cur || cur.updatedAt !== t.updatedAt; })
+        .map((t) => { const cur = data.tags.find((x) => x._doc === t._doc); return { ...t, photoCount: cur?.photoCount ?? t.photoCount ?? 0 }; });
+      await bulkSave(need, (d) => msg(`คืนรายการ ${d} / ${need.length}`));
     }
     const g = { ...sp.grid, restoredFrom: sp.createdAt };
     await store.setMeta("grid", g); setGridMeta(g);
